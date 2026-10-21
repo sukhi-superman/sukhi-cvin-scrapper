@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sukhi CVIN Scrapper</title>
+  <meta name="description" content="Searchable index of CERT-In Vulnerability Notes (CIVN), updated daily.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'media',
+      theme: { extend: { fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'], mono: ['JetBrains Mono', 'ui-monospace', 'monospace'] } } }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <style>
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .prose-pre { white-space: pre-line; }
+    details > summary::-webkit-details-marker { display: none; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-200 font-sans antialiased min-h-screen">
+
+  <!-- ============================ Header ============================ -->
+  <header class="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur sticky top-0 z-20">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2">
+      <a href="#" id="home-link" class="flex items-center gap-2 font-semibold text-slate-900 dark:text-white">
+        <svg viewBox="0 0 24 24" class="w-6 h-6 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>
+        </svg>
+        Sukhi CVIN Scrapper
+      </a>
+      <div class="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 ml-auto">
+        <span class="flex items-center gap-1.5" title="Most recent successful sync with CERT-In">
+          <span id="sync-dot" class="w-2 h-2 rounded-full bg-slate-300"></span>
+          Last data pulled: <span id="last-pulled" class="font-medium text-slate-700 dark:text-slate-200">…</span>
+        </span>
+        <span class="hidden sm:inline"><span id="total-count" class="font-medium text-slate-700 dark:text-slate-200">…</span> notes indexed</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 pb-16">
+
+    <!-- ============================ Search ============================ -->
+    <section class="pt-8 pb-4">
+      <label for="q" class="sr-only">Search</label>
+      <div class="relative">
+        <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="q" type="search" autocomplete="off" spellcheck="false"
+          placeholder="Search CIVN-2026-0508, CVE-2026-1022… or a keyword like “Chrome”"
+          class="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-11 pr-28 py-3.5 text-base shadow-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15 placeholder:text-slate-400">
+        <span id="q-mode" class="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-semibold uppercase tracking-wide px-2 py-1 rounded-md bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">Latest</span>
+      </div>
+
+      <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+        <span class="text-slate-500 dark:text-slate-400 mr-1">Severity</span>
+        <div id="sev-filters" class="flex flex-wrap gap-1.5"></div>
+        <span class="mx-2 h-5 w-px bg-slate-200 dark:bg-slate-700 hidden sm:block"></span>
+        <label class="flex items-center gap-2 text-slate-500 dark:text-slate-400">Year
+          <select id="year" class="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-slate-700 dark:text-slate-200">
+            <option value="">All</option>
+          </select>
+        </label>
+        <button id="clear" class="ml-auto text-indigo-600 dark:text-indigo-400 hover:underline hidden">Clear</button>
+      </div>
+    </section>
+
+    <!-- ============================ Results ============================ -->
+    <section>
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 id="list-title" class="text-sm font-semibold text-slate-900 dark:text-white">Newest vulnerability notes</h2>
+        <span id="list-meta" class="text-xs text-slate-500 dark:text-slate-400"></span>
+      </div>
+      <div id="error" class="hidden mb-4 rounded-lg border border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200 px-4 py-3 text-sm"></div>
+      <ul id="list" class="space-y-2.5" aria-live="polite"></ul>
+      <div id="empty" class="hidden text-center py-16 text-slate-500 dark:text-slate-400">
+        <p class="font-medium text-slate-700 dark:text-slate-200">No matching notes</p>
+        <p class="text-sm mt-1">Try a shorter ID prefix (e.g. <span class="font-mono">CVE-2026-10</span>) or a different keyword.</p>
+      </div>
+      <div class="mt-6 text-center">
+        <button id="more" class="hidden rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-800">Load more</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="max-w-5xl mx-auto px-4 pb-10 text-xs text-slate-400 dark:text-slate-500">
+    Data: <a class="underline hover:text-slate-600" href="https://www.cert-in.org.in/s2cMainServlet?pageid=VLNLIST" target="_blank" rel="noopener">CERT-In Vulnerability Notes</a>, refreshed daily. Unofficial index — always confirm on the CERT-In page before acting.
+  </footer>
+
+  <!-- ============================ Detail drawer ============================ -->
+  <div id="drawer" class="fixed inset-0 z-30 hidden" role="dialog" aria-modal="true" aria-labelledby="d-title">
+    <div id="drawer-bg" class="absolute inset-0 bg-slate-900/40 dark:bg-black/60"></div>
+    <aside class="absolute right-0 top-0 h-full w-full max-w-2xl bg-white dark:bg-slate-900 shadow-2xl overflow-y-auto">
+      <div class="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 px-5 py-3 flex items-center gap-3">
+        <span id="d-id" class="font-mono text-sm font-medium text-indigo-700 dark:text-indigo-300"></span>
+        <span id="d-sev"></span>
+        <button id="d-copy" class="ml-auto text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white" title="Copy link to this note">Copy link</button>
+        <button id="d-close" class="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close">
+          <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="px-5 py-5">
+        <h3 id="d-title" class="text-lg font-semibold text-slate-900 dark:text-white leading-snug"></h3>
+        <p id="d-date" class="mt-1 text-sm text-slate-500 dark:text-slate-400"></p>
+        <div id="d-cves" class="mt-4"></div>
+        <div id="d-body" class="mt-2 divide-y divide-slate-100 dark:divide-slate-800"></div>
+        <a id="d-source" target="_blank" rel="noopener" class="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">View original on CERT-In
+          <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1h5"/></svg>
+        </a>
+      </div>
+    </aside>
+  </div>
+
+<script>
+// ============================================================================
+// Config — the PUBLISHABLE (anon) key is safe to expose: Row Level Security makes
+// the database read-only for it. Never put the secret/service_role key here.
+// ============================================================================
+const SUPABASE_URL = 'https://ckdsqjrlfffpdsuuwwby.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_diaMU1eKINnKFgFw_BfSeg_j6ur7epy';
+
+const PAGE = 30;
+const LIST_COLS = 'civn_id,title,published_date,severity,cve_ids,first_seen_at';
+const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+const SEV_STYLE = {
+  CRITICAL: 'bg-red-100 text-red-800 ring-red-200 dark:bg-red-950 dark:text-red-200 dark:ring-red-900',
+  HIGH:     'bg-orange-100 text-orange-800 ring-orange-200 dark:bg-orange-950 dark:text-orange-200 dark:ring-orange-900',
+  MEDIUM:   'bg-amber-100 text-amber-800 ring-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-900',
+  LOW:      'bg-emerald-100 text-emerald-800 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:ring-emerald-900',
+};
+const SECTIONS = [
+  ['software_affected', 'Software affected'], ['overview', 'Overview'], ['impact', 'Impact'],
+  ['description', 'Description'], ['workaround', 'Workaround'], ['solution', 'Solution'],
+  ['vendor_information', 'Vendor information'],
+];
+
+const $ = (id) => document.getElementById(id);
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
+const state = { q: '', sev: new Set(), year: '', offset: 0, token: 0, lastVisit: null };
+
+// ----------------------------------------------------------------- helpers
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function sevBadge(sev) {
+  const s = (sev || '').toUpperCase();
+  return el('span', `inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${SEV_STYLE[s] || 'bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'}`, s || 'N/A');
+}
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+function relTime(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 90) return 'just now';
+  const m = s / 60; if (m < 60) return `${Math.round(m)} min ago`;
+  const h = m / 60; if (h < 36) return `${Math.round(h)} h ago`;
+  return `${Math.round(h / 24)} days ago`;
+}
+function detectMode(q) {
+  const u = q.trim().toUpperCase();
+  if (!u) return ['Latest', 'latest'];
+  if (/^CIVN-/.test(u)) return ['CIVN ID', 'civn'];
+  if (/^CVE-/.test(u)) return ['CVE ID', 'cve'];
+  return ['Keyword', 'keyword'];
+}
+function showError(msg) { const e = $('error'); e.textContent = msg; e.classList.toggle('hidden', !msg); }
+function store(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+function load(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
+
+// ----------------------------------------------------------------- header
+async function loadHeader() {
+  const [sync, count, years] = await Promise.all([
+    db.from('latest_sync').select('finished_at,status,notes_new').maybeSingle(),
+    db.from('vulnerability_notes').select('civn_id', { count: 'exact', head: true }),
+    db.from('vulnerability_notes').select('year').order('year', { ascending: false }).limit(1),
+  ]);
+  if (sync.data?.finished_at) {
+    const t = new Date(sync.data.finished_at);
+    $('last-pulled').textContent = relTime(t);
+    $('last-pulled').title = t.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' }) + ' IST · ' + sync.data.status;
+    const ageH = (Date.now() - t) / 36e5;
+    $('sync-dot').className = 'w-2 h-2 rounded-full ' + (ageH < 30 ? 'bg-emerald-500' : ageH < 72 ? 'bg-amber-500' : 'bg-red-500');
+  } else {
+    $('last-pulled').textContent = sync.error ? 'unavailable' : 'never';
+  }
+  if (count.count != null) $('total-count').textContent = count.count.toLocaleString('en-IN');
+  const maxYear = years.data?.[0]?.year || new Date().getFullYear();
+  for (let y = maxYear; y >= 2003; y--) $('year').append(new Option(y, y));
+}
+
+// ----------------------------------------------------------------- list
+function noteCard(n) {
+  const li = el('li');
+  const btn = el('button', 'w-full text-left rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-sm transition focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20');
+  btn.addEventListener('click', () => openNote(n.civn_id));
+  const top = el('div', 'flex flex-wrap items-center gap-2 text-xs');
+  top.append(el('span', 'font-mono font-medium text-indigo-700 dark:text-indigo-300', n.civn_id), sevBadge(n.severity),
+             el('span', 'text-slate-500 dark:text-slate-400', fmtDate(n.published_date)));
+  if (state.lastVisit && n.first_seen_at && new Date(n.first_seen_at) > state.lastVisit)
+    top.append(el('span', 'rounded-full bg-indigo-600 text-white px-1.5 py-0.5 text-[10px] font-semibold', 'NEW'));
+  btn.append(top, el('p', 'mt-1.5 font-medium text-slate-900 dark:text-slate-100 line-clamp-2', n.title));
+  const cves = n.cve_ids || [];
+  if (cves.length) {
+    const row = el('div', 'mt-2 flex flex-wrap gap-1');
+    const q = state.q.trim().toUpperCase();
+    const shown = q.startsWith('CVE-') ? [...cves.filter(c => c.startsWith(q)), ...cves.filter(c => !c.startsWith(q))] : cves;
+    shown.slice(0, 4).forEach(c => row.append(el('span', `font-mono text-[11px] rounded px-1.5 py-0.5 ${q.startsWith('CVE-') && c.startsWith(q) ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`, c)));
+    if (cves.length > 4) row.append(el('span', 'text-[11px] text-slate-500 px-1 py-0.5', `+${cves.length - 4} more`));
+    btn.append(row);
+  }
+  li.append(btn);
+  return li;
+}
+
+function skeleton(n = 6) {
+  $('list').replaceChildren(...Array.from({ length: n }, () => {
+    const li = el('li', 'rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 animate-pulse');
+    li.append(el('div', 'h-3 w-40 rounded bg-slate-200 dark:bg-slate-800'), el('div', 'mt-2.5 h-4 w-3/4 rounded bg-slate-200 dark:bg-slate-800'));
+    return li;
+  }));
+}
+
+function buildQuery() {
+  const q = state.q.trim();
+  let req = q
+    ? db.rpc('search_notes', { q, max_results: 200 }).select(LIST_COLS)
+    : db.from('vulnerability_notes').select(LIST_COLS).order('published_date', { ascending: false }).order('civn_id', { ascending: false });
+  if (state.sev.size) req = req.in('severity', [...state.sev]);
+  if (state.year) req = req.eq('year', +state.year);
+  return req.range(state.offset, state.offset + PAGE - 1);
+}
+
+async function refresh(append = false) {
+  const token = ++state.token;
+  if (!append) { state.offset = 0; skeleton(); }
+  const [label, mode] = detectMode(state.q);
+  $('q-mode').textContent = label;
+  $('list-title').textContent = mode === 'latest' ? 'Newest vulnerability notes' : `Results for “${state.q.trim()}”`;
+  $('clear').classList.toggle('hidden', !state.q && !state.sev.size && !state.year);
+  const { data, error } = await buildQuery();
+  if (token !== state.token) return;              // a newer search superseded this one
+  if (error) { showError('Could not load notes: ' + error.message); $('list').replaceChildren(); return; }
+  showError('');
+  const items = data.map(noteCard);
+  append ? $('list').append(...items) : $('list').replaceChildren(...items);
+  state.offset += data.length;
+  $('empty').classList.toggle('hidden', state.offset > 0);
+  $('more').classList.toggle('hidden', data.length < PAGE);
+  $('list-meta').textContent = state.offset ? `${state.offset}${data.length === PAGE ? '+' : ''} shown` : '';
+}
+
+// ----------------------------------------------------------------- detail
+async function openNote(id) {
+  location.hash = 'note=' + encodeURIComponent(id);
+}
+async function renderNote(id) {
+  const { data: n, error } = await db.from('vulnerability_notes').select('*').eq('civn_id', id).maybeSingle();
+  if (error || !n) { showError(error ? error.message : `${id} not found`); return closeDrawer(true); }
+  $('d-id').textContent = n.civn_id;
+  $('d-sev').replaceChildren(sevBadge(n.severity));
+  $('d-title').textContent = n.title;
+  $('d-date').textContent = 'Published ' + fmtDate(n.published_date);
+  $('d-source').href = n.source_url;
+
+  const cveBox = $('d-cves'); cveBox.replaceChildren();
+  if (n.cve_ids?.length) {
+    const d = el('details', 'group rounded-lg border border-slate-200 dark:border-slate-800'); d.open = n.cve_ids.length <= 12;
+    const s = el('summary', 'cursor-pointer select-none px-3 py-2 text-sm font-medium flex items-center gap-2');
+    s.append(el('span', '', `CVE IDs (${n.cve_ids.length})`), el('span', 'ml-auto text-xs text-slate-400 group-open:hidden', 'show'));
+    const wrap = el('div', 'px-3 pb-3 flex flex-wrap gap-1.5');
+    n.cve_ids.forEach(c => { const a = el('a', 'font-mono text-xs rounded px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-indigo-950 hover:text-indigo-800', c); a.href = 'https://www.cve.org/CVERecord?id=' + c; a.target = '_blank'; a.rel = 'noopener'; wrap.append(a); });
+    d.append(s, wrap); cveBox.append(d);
+  }
+
+  const body = $('d-body'); body.replaceChildren();
+  const addSection = (title, text) => {
+    const sec = el('section', 'py-4');
+    sec.append(el('h4', 'text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400', title),
+               el('p', 'mt-1.5 text-sm leading-relaxed prose-pre text-slate-700 dark:text-slate-300', text));
+    body.append(sec);
+  };
+  SECTIONS.forEach(([k, t]) => n[k] && addSection(t, n[k]));
+  Object.entries(n.other_sections || {}).forEach(([k, v]) => addSection(k, v));
+  if (n.reference_urls?.length) {
+    const sec = el('section', 'py-4');
+    sec.append(el('h4', 'text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400', 'References'));
+    const ul = el('ul', 'mt-1.5 space-y-1 text-sm');
+    n.reference_urls.forEach(u => { const a = el('a', 'text-indigo-600 dark:text-indigo-400 hover:underline break-all', u); a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer'; const li = el('li'); li.append(a); ul.append(li); });
+    sec.append(ul); body.append(sec);
+  }
+  $('drawer').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  $('d-close').focus();
+}
+function closeDrawer(silent) {
+  $('drawer').classList.add('hidden');
+  document.body.style.overflow = '';
+  if (!silent && location.hash.startsWith('#note=')) history.replaceState(null, '', location.pathname + location.search + (state.q ? '#q=' + encodeURIComponent(state.q) : ''));
+}
+
+// ----------------------------------------------------------------- routing & events
+function route() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h.startsWith('note=')) return renderNote(h.slice(5).toUpperCase());
+  closeDrawer(true);
+  if (h.startsWith('q=') && h.slice(2) !== state.q) { state.q = h.slice(2); $('q').value = state.q; refresh(); }
+}
+
+let debounce;
+$('q').addEventListener('input', (e) => {
+  state.q = e.target.value;
+  clearTimeout(debounce);
+  debounce = setTimeout(() => { history.replaceState(null, '', state.q ? '#q=' + encodeURIComponent(state.q) : location.pathname); refresh(); }, 250);
+});
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(debounce); refresh(); } });
+$('year').addEventListener('change', (e) => { state.year = e.target.value; refresh(); });
+$('more').addEventListener('click', () => refresh(true));
+$('clear').addEventListener('click', () => { state.q = ''; state.sev.clear(); state.year = ''; $('q').value = ''; $('year').value = ''; renderSevFilters(); history.replaceState(null, '', location.pathname); refresh(); });
+$('home-link').addEventListener('click', (e) => { e.preventDefault(); $('clear').click(); });
+$('d-close').addEventListener('click', () => closeDrawer());
+$('drawer-bg').addEventListener('click', () => closeDrawer());
+$('d-copy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(location.href); $('d-copy').textContent = 'Copied'; setTimeout(() => $('d-copy').textContent = 'Copy link', 1500); } catch (_) {} });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('drawer').classList.contains('hidden')) closeDrawer();
+  if (e.key === '/' && document.activeElement !== $('q')) { e.preventDefault(); $('q').focus(); }
+});
+window.addEventListener('hashchange', route);
+
+function renderSevFilters() {
+  $('sev-filters').replaceChildren(...SEVERITIES.map(s => {
+    const on = state.sev.has(s);
+    const b = el('button', `rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset transition ${on ? SEV_STYLE[s] : 'bg-white text-slate-600 ring-slate-300 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800'}`, s.charAt(0) + s.slice(1).toLowerCase());
+    b.setAttribute('aria-pressed', on);
+    b.addEventListener('click', () => { on ? state.sev.delete(s) : state.sev.add(s); renderSevFilters(); refresh(); });
+    return b;
+  }));
+}
+
+// ----------------------------------------------------------------- boot
+(async function init() {
+  const lv = load('cvin:lastVisit');
+  state.lastVisit = lv ? new Date(lv) : null;
+  store('cvin:lastVisit', new Date().toISOString());
+  renderSevFilters();
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h.startsWith('q=')) { state.q = h.slice(2); $('q').value = state.q; }
+  await Promise.all([loadHeader().catch(e => showError('Could not reach the database: ' + e.message)), refresh()]);
+  if (h.startsWith('note=')) route();
+})();
+</script>
+</body>
+</html>
