@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sukhi CVIN Intelligence</title>
+  <meta name="description" content="Search, explore and analyse CERT-In Vulnerability Notes (CIVNs) and CVEs. Updated daily.">
+  <meta name="color-scheme" content="dark light">
+  <script>
+    // Apply the saved/system theme before first paint (avoids a flash).
+    try { var t = localStorage.getItem('cvin:theme'); document.documentElement.dataset.theme = t || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); } catch (e) {}
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="preconnect" href="https://ckdsqjrlfffpdsuuwwby.supabase.co" crossorigin>
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar">
+      <button class="btn btn-ghost icon-btn" id="nav-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <span class="brand">Sukhi CVIN Intelligence</span>
+    </header>
+
+    <aside class="sidebar" id="sidebar" aria-label="Main">
+      <a class="brand" href="#/overview">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>
+        <span>Sukhi CVIN<small>Vulnerability intelligence</small></span>
+      </a>
+      <nav class="nav" id="nav">
+        <a href="#/overview" data-view="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Overview</a>
+        <a href="#/explore" data-view="explore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Explorer</a>
+        <a href="#/analytics" data-view="analytics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Analytics</a>
+      </nav>
+      <div class="side-foot">
+        <div class="fresh" id="freshness" aria-live="polite"><span class="dot"></span><span>Loading data…</span></div>
+        <div class="side-actions">
+          <button class="btn btn-sm" id="reload" title="Fetch the latest data from the database">Reload data</button>
+          <button class="btn btn-sm" id="theme" aria-label="Switch colour theme">Light mode</button>
+        </div>
+        <span class="faint">Source: <a href="https://www.cert-in.org.in/s2cMainServlet?pageid=VLNLIST" target="_blank" rel="noopener">CERT-In</a> · Unofficial index · <a href="../">Classic view</a></span>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim" hidden></div>
+
+    <main class="main" id="main" tabindex="-1">
+      <div id="banners"></div>
+      <div id="view"><div class="loading"><div class="spinner" aria-hidden="true"></div><div>Loading vulnerability notes…</div></div></div>
+    </main>
+  </div>
+  <noscript><p style="padding:20px">This dashboard needs JavaScript to load data.</p></noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
