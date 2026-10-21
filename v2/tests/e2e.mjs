@@ -111,22 +111,19 @@ const waitCount = async (page) => { await page.waitForFunction(() => /advisories
 if (SCEN === 'normal') {
   const { page } = await setup();
   await page.goto('https://app.test/v2/');
-  try { await page.waitForSelector('.kpi', { timeout: 15000 }); } catch (e) { console.log('ERRORS', errors, (await page.textContent('#view')).slice(0, 300)); process.exit(1); }
-  const tiles = await page.$$eval('.kpi', (els) => els.map((e) => e.querySelector('.kpi-value').textContent));
-  check('KPI total = deduped rows', num(tiles[0]) === expected.length, `${tiles[0]} vs ${expected.length}`);
+  try { await waitCount(page); } catch (e) { console.log('ERRORS', errors, (await page.textContent('#view')).slice(0, 300)); process.exit(1); }
+  check('default route = CVIN Explorer', page.url().endsWith('/v2/') && (await page.textContent('.page-head h1')) === 'CVIN Explorer');
+  check('nav has only CVIN Explorer + CVIN Analytics', JSON.stringify(await page.$$eval('#nav a', (a) => a.map((x) => x.textContent.trim()))) === JSON.stringify(['CVIN Explorer', 'CVIN Analytics']));
+  check('total = deduped rows', (await countText(page)) === expected.length, `${await countText(page)} vs ${expected.length}`);
   check('duplicate excluded & reported', expected.length === notes.length && /1 duplicate/.test(await page.textContent('#banners')));
-  check('KPI critical', num(tiles[1]) === K.critical.value, `${tiles[1]} vs ${K.critical.value}`);
-  check('KPI high', num(tiles[2]) === K.high.value);
-  check('KPI published 7d', num(tiles[3]) === K.published7.value, `${tiles[3]} vs ${K.published7.value}`);
-  check('KPI changed 7d', num(tiles[4]) === K.changed7.value, `${tiles[4]} vs ${K.changed7.value}`);
-  check('refresh tile shows real age', /h ago/.test(tiles[5]));
-  check('unique CVEs shown', (await page.textContent('.kpi')).includes(C.fmtInt(stats.unique_cves)));
   check('freshness sidebar ok', (await page.getAttribute('#freshness .dot', 'class')).includes('ok'));
-  await page.screenshot({ path: `${OUT}/v2-overview.png`, fullPage: true });
+  await page.screenshot({ path: `${OUT}/v2-explorer.png`, fullPage: true });
+  await page.goto('https://app.test/v2/#/overview'); await waitCount(page);
+  check('old #/overview link → CVIN Explorer', (await page.textContent('.page-head h1')) === 'CVIN Explorer');
 
-  // KPI click-through reconciles with Explorer
-  await page.click('.kpi >> nth=1'); await waitCount(page);
-  check('Critical KPI → Explorer count matches', (await countText(page)) === K.critical.value, `${await countText(page)}`);
+  // severity filter via URL
+  await page.goto('https://app.test/v2/#/explore?sev=CRITICAL'); await waitCount(page);
+  check('Critical filter count', (await countText(page)) === K.critical.value, `${await countText(page)}`);
   check('active chip present', (await page.textContent('#chips')).includes('Critical'));
 
   // search + filters combine & clear
@@ -222,23 +219,23 @@ if (SCEN === 'normal') {
   check('v1 #q= link works', (await page.inputValue('#q')) === 'chrome');
 
   // theme
-  await page.goto('https://app.test/v2/#/overview'); await page.waitForSelector('.kpi');
+  await page.goto('https://app.test/v2/#/explore'); await waitCount(page);
   const theme0 = await page.getAttribute('html', 'data-theme');
   await page.click('#theme');
   const theme1 = await page.getAttribute('html', 'data-theme');
   check('theme toggles + persists', theme0 !== theme1 && (await page.evaluate(() => localStorage.getItem('cvin:theme'))) === theme1, `${theme0}→${theme1}`);
   if (theme1 !== 'light') await page.click('#theme');
-  await page.screenshot({ path: `${OUT}/v2-overview-light.png` });
+  await page.screenshot({ path: `${OUT}/v2-explorer-light.png` });
   await page.click('#theme');
 
   // mobile
   const m = await setup({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  for (const r of ['#/overview', '#/explore', '#/analytics', `#/advisory/CIVN-${y}-9001`]) {
+  for (const r of ['#/explore', '#/analytics', `#/advisory/CIVN-${y}-9001`]) {
     await m.page.goto('https://app.test/v2/' + r); await m.page.waitForSelector('.page-head, .detail'); await m.page.waitForTimeout(300);
     check(`mobile no h-scroll ${r}`, await m.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), String(await m.page.evaluate(() => document.documentElement.scrollWidth)));
   }
-  await m.page.goto('https://app.test/v2/#/overview'); await m.page.waitForSelector('.kpi');
-  await m.page.screenshot({ path: `${OUT}/v2-mobile-overview.png`, fullPage: true });
+  await m.page.goto('https://app.test/v2/#/explore'); await waitCount(m.page);
+  await m.page.screenshot({ path: `${OUT}/v2-mobile-explorer.png`, fullPage: true });
   await m.page.click('#nav-toggle'); await m.page.waitForTimeout(250);
   check('mobile nav opens', await m.page.evaluate(() => document.getElementById('app').classList.contains('nav-open')));
   await m.page.screenshot({ path: `${OUT}/v2-mobile-nav.png` });

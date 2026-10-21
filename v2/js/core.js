@@ -254,11 +254,11 @@ export function parseHash(hash) {
   if (h.startsWith('note=')) return { view: 'advisory', id: decodeURIComponent(h.slice(5)).toUpperCase(), params: {} }; // v1 links
   if (h.startsWith('q=')) return { view: 'explore', params: { q: decodeURIComponent(h.slice(2)) } };                 // v1 links
   const [path, qs = ''] = h.replace(/^\//, '').split('?');
-  const [view = 'overview', arg] = path.split('/');
+  const [view = 'explore', arg] = path.split('/');
   const params = {};
   for (const [k, v] of new URLSearchParams(qs)) params[k] = LIST_KEYS.has(k) ? v.split(',').filter(Boolean) : v;
-  const known = ['overview', 'explore', 'analytics', 'advisory'];
-  return { view: known.includes(view) ? view : 'overview', id: arg ? decodeURIComponent(arg).toUpperCase() : undefined, params };
+  const known = ['explore', 'analytics', 'advisory']; // old #/overview links fall back to the Explorer
+  return { view: known.includes(view) ? view : 'explore', id: arg ? decodeURIComponent(arg).toUpperCase() : undefined, params };
 }
 export function buildHash(view, params = {}, id) {
   const qs = new URLSearchParams();

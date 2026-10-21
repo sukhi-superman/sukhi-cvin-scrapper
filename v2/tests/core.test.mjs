@@ -150,8 +150,9 @@ test('hash routing round-trips and keeps v1 links working', () => {
   assert.deepEqual(C.parseHash('#/advisory/civn-2026-0508'), { view: 'advisory', id: 'CIVN-2026-0508', params: {} });
   assert.equal(C.parseHash('#note=CIVN-2026-0508').id, 'CIVN-2026-0508');
   assert.deepEqual(C.parseHash('#q=CVE-2026-1022'), { view: 'explore', params: { q: 'CVE-2026-1022' } });
-  assert.equal(C.parseHash('').view, 'overview');
-  assert.equal(C.parseHash('#/nonsense').view, 'overview');
+  assert.equal(C.parseHash('').view, 'explore');
+  assert.equal(C.parseHash('#/nonsense').view, 'explore');
+  assert.equal(C.parseHash('#/overview').view, 'explore');
 });
 
 test('coverage percentages', () => {

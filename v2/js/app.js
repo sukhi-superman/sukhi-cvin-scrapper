@@ -179,82 +179,16 @@ function render() {
     return;
   }
   if (!S.rows.length) { view.replaceChildren(h('div', { class: 'card card-pad' }, emptyState('No advisories indexed yet', 'The database is reachable but empty. Run the daily sync or the historical backfill workflow on GitHub.'))); return; }
-  const titles = { overview: 'Overview', explore: 'Explorer', analytics: 'Analytics', advisory: route.id || 'Advisory' };
+  const titles = { explore: 'CVIN Explorer', analytics: 'CVIN Analytics', advisory: route.id || 'Advisory' };
   document.title = `${titles[route.view]} · Sukhi CVIN Intelligence`;
   const changedView = lastView !== route.view; lastView = route.view;
   if (route.view === 'explore') renderExplore(view, route.params, changedView);
   else if (route.view === 'analytics') renderAnalytics(view, route.params);
-  else if (route.view === 'advisory') renderAdvisory(view, route.id);
-  else renderOverview(view);
+  else renderAdvisory(view, route.id);
   if (changedView) { window.scrollTo(0, 0); }
 }
 
-// ============================================================================ OVERVIEW
-function renderOverview(view) {
-  const now = new Date();
-  const k = C.kpis(S.rows, { now, latestSync: S.sync, trackingSince: TRACKING_SINCE });
-  const st = S.stats;
-  const cmp = (cur, prev, curLabel, prevLabel) => {
-    const p = C.pctChange(cur, prev);
-    const dir = cur > prev ? '▲' : cur < prev ? '▼' : '■';
-    return h('span', { class: 'delta' }, h('span', { class: 'arrow', 'aria-hidden': 'true' }, dir),
-      `${C.fmtInt(cur)} ${curLabel} · ${prevLabel}: ${C.fmtInt(prev)}`, p != null ? h('span', { class: 'faint' }, ` (${p > 0 ? '+' : ''}${p.toFixed(0)}%)`) : null);
-  };
-  const kpi = ({ label, color, value, small, def, extra, href, title }) =>
-    h('a', { class: 'card kpi', href, title, style: color ? `--c:${color}` : null },
-      h('span', { class: 'kpi-label' }, h('span', { class: 'mark', 'aria-hidden': 'true' }), label),
-      h('span', { class: 'kpi-value' }, value, small ? h('small', {}, ' ', small) : null),
-      extra || null,
-      h('span', { class: 'kpi-def' }, def));
-  const r30 = (r) => `${C.fmtDate(r.from)} – ${C.fmtDate(r.to)}`;
-  const { level, ageH } = syncHealth();
-  const tiles = h('div', { class: 'grid grid-kpi' },
-    kpi({ label: 'Advisories indexed', value: C.fmtInt(k.total.value), href: linkTo('explore'),
-      extra: st ? h('span', { class: 'kpi-def' }, `${C.fmtInt(st.unique_cves)} unique `, term('CVEs', TERMS.CVE), ` across ${C.fmtInt(st.cve_mentions)} mentions`) : null,
-      def: 'Unique CIVN advisories, deduplicated by ID · all time' }),
-    kpi({ label: 'Critical', color: 'var(--sev-critical)', value: C.fmtInt(k.critical.value), href: linkTo('explore', { sev: ['CRITICAL'] }),
-      extra: cmp(k.critical.last30, k.critical.prev30, 'in the last 30 days', 'prior 30'), def: 'Rated Critical by CERT-In · all time' }),
-    kpi({ label: 'High', color: 'var(--sev-high)', value: C.fmtInt(k.high.value), href: linkTo('explore', { sev: ['HIGH'] }),
-      extra: cmp(k.high.last30, k.high.prev30, 'in the last 30 days', 'prior 30'), def: 'Rated High by CERT-In · all time' }),
-    kpi({ label: 'Published in the last 7 days', value: C.fmtInt(k.published7.value), href: linkTo('explore', { from: k.published7.range.from, to: k.published7.range.to }),
-      extra: cmp(k.published7.value, k.published7.prev, 'this week', 'previous 7 days'), def: `Publication date ${r30(k.published7.range)}` }),
-    kpi({ label: 'Changed in the last 7 days', value: C.fmtInt(k.changed7.value), href: linkTo('explore', { changed: '7', sort: 'changed' }),
-      def: `Notes whose content changed when re-checked. Tracking since ${C.fmtDate(TRACKING_SINCE)}; CERT-In publishes no update dates.` }),
-    kpi({ label: 'Last successful refresh', color: level === 'ok' ? 'var(--ok)' : level === 'warn' ? 'var(--warn)' : 'var(--bad)',
-      value: k.refresh.at ? C.fmtAge(ageH) : 'None', href: linkTo('analytics', {}) + '', title: 'See data freshness in Analytics',
-      def: k.refresh.at ? `${new Date(k.refresh.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })} IST · ${S.sync.mode} run, ${C.fmtInt(S.sync.notes_new)} new, ${C.fmtInt(S.sync.notes_failed)} failed` : 'No successful sync recorded' }),
-  );
-
-  const latest = C.sortRows(S.rows, 'published_desc').slice(0, 8);
-  const latestList = h('ul', { class: 'results' }, latest.map((r) => resultRow(r)));
-  const dist = C.severityDistribution(S.rows).filter((d) => d.count || d.key !== 'UNKNOWN');
-  const cov = C.coverage(S.rows);
-  const covRow = (label, pct, note) => h('tr', {}, h('td', {}, label), h('td', { class: 'n' }, `${pct}%`), h('td', { class: 'faint' }, note || ''));
-
-  view.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Overview'),
-      h('p', {}, `Every figure is computed from the ${C.fmtInt(S.rows.length)} `, term('CIVN', TERMS.CIVN), ' advisories currently loaded. Click a tile to open the matching list.'))),
-    tiles,
-    h('div', { class: 'grid grid-2', style: 'margin-top:14px' },
-      card('Latest advisories', 'Newest by CERT-In publication date', latestList,
-        h('div', { class: 'result-bar' }, h('a', { class: 'btn', href: linkTo('explore') }, 'Open the Explorer'))),
-      h('div', { class: 'stack' },
-        chartCard({ title: 'Severity mix', sub: 'All advisories · CERT-In rating',
-          drawChart: (el) => hBarChart(el, { items: dist.map((d) => ({ key: d.key, label: d.label, value: d.count, color: `var(--sev-${d.key.toLowerCase()})` })), valueText: (it) => `${C.fmtInt(it.value)} · ${C.fmtPct(dist.find((d) => d.key === it.key).pct)}`, onSelect: (it) => go('explore', { sev: [it.key] }), ariaLabel: 'Advisories by severity' }),
-          drawTable: (el) => dataTable(el, [{ label: 'Severity', get: (d) => d.label }, { label: 'Advisories', get: (d) => C.fmtInt(d.count), num: true }, { label: 'Share', get: (d) => C.fmtPct(d.pct), num: true }], dist),
-          note: k.unknownSeverity ? `${C.fmtInt(k.unknownSeverity)} advisories have no severity in the source and are shown as Unknown.` : null }),
-        card('Data coverage', 'Share of advisories where each field is available',
-          h('div', { class: 'tbl-wrap', style: 'padding-top:8px' }, h('table', { class: 'tbl' },
-            h('tbody', {},
-              covRow('Severity (CERT-In)', cov.severity), covRow('Publication date', cov.published),
-              covRow('Vendor', cov.vendor, 'derived'), covRow('Products', cov.products, 'derived'),
-              covRow('At least one CVE', cov.cves), covRow('Category assigned', cov.classified, 'derived')))),
-          h('p', { class: 'note' }, 'Not published by CERT-In, so not shown: ', term('CVSS', TERMS.CVSS), ' scores, per-note update dates and exploitation status.')),
-      )),
-  );
-}
-
-// ============================================================================ result row (Explorer + Overview)
+// ============================================================================ result row (Explorer)
 function highlight(text, q) {
   const needle = typeof q === 'string' ? q.trim() : '';
   if (!needle || /^(CIVN|CVE)-/i.test(needle) || needle.length < 2) return text;
@@ -317,7 +251,7 @@ function renderExplore(view, params, freshView) {
     }));
     const prodInput = h('input', { id: 'f-product', class: 'input', list: 'products', value: f.product, placeholder: 'Any product', onchange: (e) => set({ product: e.target.value.trim() }) });
     shell.append(
-      h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Explorer'), h('p', {}, 'Search and filter every indexed advisory. Filters combine; the URL keeps your view shareable.'))),
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'CVIN Explorer'), h('p', {}, 'Search and filter every indexed advisory. Filters combine; the URL keeps your view shareable.'))),
       h('div', { class: 'card' },
         h('div', { class: 'card-pad', style: 'padding-bottom:6px' }, h('div', { class: 'row' }, h('div', { class: 'search' }, icon('search'), q, mode))),
         h('div', { style: 'padding:4px 18px 0' }, h('span', { class: 'kpi-def', style: 'margin-right:8px' }, 'Severity'), sevPick),
@@ -511,7 +445,7 @@ function renderAnalytics(view, params) {
       : h('p', { class: 'note' }, `No content changes have been observed yet. The daily sync re-checks the newest notes; when CERT-In revises one, it will appear here. Changes before ${C.fmtDate(TRACKING_SINCE)} cannot be known.`));
 
   view.replaceChildren(
-    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Analytics'), h('p', {}, 'Trends and patterns across CERT-In advisories. Click any bar or point to open the matching advisories.'))),
+    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'CVIN Analytics'), h('p', {}, 'Trends and patterns across CERT-In advisories. Click any bar or point to open the matching advisories.'))),
     filterRow, stats, trend,
     h('div', { class: 'grid grid-2', style: 'margin-top:14px' }, sevCard, catCard, vendorCard, prodCard),
     h('div', { style: 'margin-top:14px' }, fresh));
