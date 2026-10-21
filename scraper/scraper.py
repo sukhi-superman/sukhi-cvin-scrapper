@@ -17,9 +17,9 @@ Environment
 How the site works (verified Oct 2026)
 --------------------------------------
 * Year listing: /s2cMainServlet?pageid=VLNLIST02&year=YYYY shows 20 notes, newest first.
-* Further pages: /VulNotesList.jsp?next=20, ?next=40 ... — these remember the year in the
-  server-side session (JSESSIONID cookie), so one requests.Session must walk a year's pages
-  in order, before any other listing request.
+* The site's own "Next >>" links (/VulNotesList.jsp?next=20) depend on a server session and
+  break from scripts. Instead we use the stateless ...&year=YYYY&next=N form; an offset past
+  the end (next=100000) returns the entire year on one page.
 * Detail: /s2cMainServlet?pageid=PUBVLNOTES01&VLCODE=CIVN-YYYY-NNNN. Section headings are
   elements whose class contains "verblue" (e.g. <p class="contentTD; verblue">Solution</p>).
 """
@@ -45,6 +45,9 @@ log = logging.getLogger("cvin")
 # --------------------------------------------------------------------------- constants
 BASE = "https://www.cert-in.org.in"
 LIST_URL = BASE + "/s2cMainServlet?pageid=VLNLIST02&year={year}"
+LIST_PAGE_URL = BASE + "/s2cMainServlet?pageid=VLNLIST02&year={year}&next={offset}"  # stateless paging
+PAGE_SIZE = 20
+ALL_OFFSET = 100000  # offset past the end → CERT-In returns the whole year on one page
 DETAIL_URL = BASE + "/s2cMainServlet?pageid=PUBVLNOTES01&VLCODE={civn}"
 FIRST_YEAR = 2003
 USER_AGENT = (
@@ -323,10 +326,14 @@ class RetryableHTTP(Exception):
 
 
 class CertInClient:
-    def __init__(self, delay: float = 1.0, timeout: float = 30.0, retries: int = 4):
+    def __init__(self, delay: float = 1.0, timeout: float = 60.0, retries: int = 4):
         self.delay, self.timeout, self.retries = delay, timeout, retries
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT, "Accept-Language": "en-IN,en;q=0.8"})
+        # Stateless URLs need no session. Observed on GitHub runners: once a JSESSIONID cookie was
+        # held, CERT-In stopped answering (read timeouts), so never store cookies.
+        from http.cookiejar import DefaultCookiePolicy
+        self.session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
         self._last = 0.0
 
     def get(self, url: str) -> str:
@@ -353,33 +360,37 @@ class CertInClient:
 
     def list_year(self, year: int, stop_when: Callable[[list[ListingEntry]], bool] | None = None,
                   max_pages: int = 200) -> list[ListingEntry]:
-        """All listing entries for a year (newest first). Stops early when stop_when(page) is True."""
-        first_url = LIST_URL.format(year=year)
-        url: str | None = first_url
+        """All listing entries for a year (newest first).
+
+        Uses the stateless URL  ...pageid=VLNLIST02&year=Y&next=N  (no session needed).
+        Fast path: an offset past the end makes CERT-In return the whole year in one page.
+        Fallback: walk offsets 0, 20, 40 ... until a short/empty page (stops early if stop_when(page)).
+        """
+        def year_entries(html: str, seen: set[str]) -> list[ListingEntry]:
+            entries, _ = parse_listing(html)
+            return [e for e in entries if e.civn_id not in seen and e.civn_id.startswith(f"CIVN-{year}-")]
+
+        try:
+            full = year_entries(self.get(LIST_PAGE_URL.format(year=year, offset=ALL_OFFSET)), set())
+            nums = [int(e.civn_id.rsplit("-", 1)[1]) for e in full]
+            if full and len(full) > PAGE_SIZE and len(set(nums)) >= 0.95 * max(nums):
+                log.info("%s: full listing in one request → %d notes", year, len(full))
+                return full
+            log.info("%s: one-page listing returned %d notes; paging instead", year, len(full))
+        except Exception as ex:
+            log.warning("%s: one-page listing failed (%s); paging instead", year, ex)
+
         out: list[ListingEntry] = []
         seen: set[str] = set()
-        pages = 0
-        resynced = False
-        while url and pages < max_pages:
-            html = self.get(url)
-            entries, next_url = parse_listing(html)
-            if not entries and pages > 0 and NOT_FOUND_RE.search(html) and not resynced:
-                # Session lost its year — re-open the year and retry this page once.
-                log.warning("%s: pagination session lost at %s; re-syncing", year, url)
-                self.get(first_url)
-                resynced = True
-                continue
-            page = [e for e in entries if e.civn_id not in seen and e.civn_id.startswith(f"CIVN-{year}-")]
+        for page_no in range(max_pages):
+            page = year_entries(self.get(LIST_PAGE_URL.format(year=year, offset=page_no * PAGE_SIZE)), seen)
             if not page:
                 break
             seen.update(e.civn_id for e in page)
             out.extend(page)
-            pages += 1
-            resynced = False
-            log.info("%s: listing page %d → %d notes (total %d)", year, pages, len(page), len(out))
-            if stop_when and stop_when(page):
+            log.info("%s: listing page %d → %d notes (total %d)", year, page_no + 1, len(page), len(out))
+            if len(page) < PAGE_SIZE or (stop_when and stop_when(page)):
                 break
-            url = next_url
         return out
 
     def fetch_note(self, civn_id: str, listing: ListingEntry | None = None) -> Note:
