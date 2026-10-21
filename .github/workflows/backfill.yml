@@ -1,0 +1,105 @@
+name: Historical backfill
+
+# Start manually: Actions → "Historical backfill" → Run workflow.
+# Resumable: notes already in Supabase are skipped, so if a run stops at the time
+# budget, just run it again with the same years.
+on:
+  workflow_dispatch:
+    inputs:
+      year_from:
+        description: "First year (CERT-In notes start in 2003)"
+        default: "2003"
+        required: true
+      year_to:
+        description: "Last year (blank = current year)"
+        default: ""
+        required: false
+      newest_first:
+        description: "Process newest years first"
+        type: boolean
+        default: true
+      force:
+        description: "Re-fetch notes already stored (slow; only after parser changes)"
+        type: boolean
+        default: false
+      max_minutes:
+        description: "Stop cleanly after N minutes (GitHub's hard limit is 360)"
+        default: "330"
+        required: true
+      delay:
+        description: "Seconds between requests to CERT-In"
+        default: "1.0"
+        required: true
+
+concurrency:
+  group: cvin-scrape
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check secrets are set
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "::error::Add SUPABASE_URL and SUPABASE_KEY under Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
+      - name: Parser self-test (offline fixtures)
+        run: python tests/test_parsing.py
+
+      - name: Backfill CERT-In → Supabase
+        env:
+          YEAR_FROM: ${{ inputs.year_from }}
+          YEAR_TO: ${{ inputs.year_to }}
+          NEWEST_FIRST: ${{ inputs.newest_first }}
+          FORCE: ${{ inputs.force }}
+          MAX_MINUTES: ${{ inputs.max_minutes }}
+          DELAY: ${{ inputs.delay }}
+        run: |
+          set -o pipefail
+          ARGS=(--from "$YEAR_FROM")
+          [ -n "$YEAR_TO" ] && ARGS+=(--to "$YEAR_TO")
+          [ "$NEWEST_FIRST" = "true" ] && ARGS+=(--newest-first)
+          [ "$FORCE" = "true" ] && ARGS+=(--force)
+          python scraper/scraper.py --delay "$DELAY" --max-minutes "$MAX_MINUTES" backfill "${ARGS[@]}" 2>&1 | tee backfill.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Backfill"
+            echo '```'
+            grep -E "listed,|done:|ERROR|time budget" backfill.log | tail -n 60 || true
+            echo '```'
+            if grep -q "time budget reached" backfill.log; then
+              echo "⏸ Stopped at the time budget — run this workflow again with the same years to continue."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-log-${{ github.run_id }}
+          path: backfill.log
+          retention-days: 14

@@ -1,0 +1,96 @@
+name: Daily CVIN sync
+
+on:
+  schedule:
+    # 01:17 UTC = 06:47 IST every day (off the top of the hour, where GitHub queues are busiest)
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+    inputs:
+      recheck:
+        description: "Also re-fetch the newest N stored notes (catches CERT-In revisions)"
+        default: "5"
+        required: false
+      civn_ids:
+        description: "Optional: fetch only these notes instead (space-separated, e.g. CIVN-2026-0508)"
+        default: ""
+        required: false
+
+# Never run two scrapes at once (daily + backfill share CERT-In and Supabase).
+concurrency:
+  group: cvin-scrape
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check secrets are set
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "::error::Add SUPABASE_URL and SUPABASE_KEY under Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
+      - name: Parser self-test (offline fixtures)
+        run: python tests/test_parsing.py
+
+      - name: Scrape CERT-In → Supabase
+        env:
+          RECHECK: ${{ github.event.inputs.recheck || '5' }}
+          CIVN_IDS: ${{ github.event.inputs.civn_ids || '' }}
+        run: |
+          set -o pipefail
+          if [ -n "$CIVN_IDS" ]; then
+            python scraper/scraper.py --max-minutes 50 note $CIVN_IDS 2>&1 | tee scrape.log
+          else
+            python scraper/scraper.py --max-minutes 50 incremental --recheck "$RECHECK" 2>&1 | tee scrape.log
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### CVIN sync"
+            echo '```'
+            grep -E "done:|ERROR|failed|time budget" scrape.log | tail -n 30 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-log-${{ github.run_id }}
+          path: scrape.log
+          retention-days: 14
+
+  # GitHub disables scheduled workflows after 60 days without repo activity.
+  # Re-enabling via the API each run resets that clock — no dummy commits needed.
+  keepalive:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    permissions:
+      actions: write
+    steps:
+      - name: Keep schedule alive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/daily_sync.yml/enable"
