@@ -502,7 +502,10 @@ def run(args) -> int:
     if args.dry_run:
         sink = DryRunSink(open(args.out, "w", encoding="utf-8") if args.out else sys.stdout)
     else:
-        url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY")
+        # .strip(): secrets pasted into GitHub often carry a trailing newline/space,
+        # which requests rejects as an invalid header value.
+        url = (os.environ.get("SUPABASE_URL") or "").strip()
+        key = (os.environ.get("SUPABASE_KEY") or "").strip()
         if not url or not key:
             log.error("SUPABASE_URL and SUPABASE_KEY must be set (or use --dry-run)")
             return 2
