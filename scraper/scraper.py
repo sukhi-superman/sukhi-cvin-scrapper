@@ -438,6 +438,40 @@ class Supabase:
                                  data=json.dumps(fields), timeout=self.timeout))
 
 
+KEY_CHARS_RE = re.compile(r"[A-Za-z0-9._\-]")
+
+
+def clean_supabase_key(raw: str) -> str:
+    """Remove pasted whitespace/line breaks; explain (without revealing the key) if it's still malformed."""
+    key = re.sub(r"\s+", "", raw)
+    if key.lower().startswith("bearer"):
+        key = key[6:]
+    if key.startswith("sb_secret_"):
+        kind = "new secret key (sb_secret_…)"
+    elif key.startswith("sb_publishable_"):
+        kind = "PUBLISHABLE key — wrong one, writes will be rejected"
+    elif key.startswith("eyJ"):
+        kind = "legacy JWT key"
+        try:
+            import base64
+            payload = key.split(".")[1]
+            role = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))).get("role")
+            kind += f" (role={role})" + ("" if role == "service_role" else " — wrong one, use service_role")
+        except Exception:
+            kind += " (could not decode)"
+    else:
+        kind = "unrecognised format"
+    bad = sorted({"non-ASCII" if ord(c) > 127 else repr(c) for c in key if not KEY_CHARS_RE.match(c)})
+    if bad or not key:
+        raise ValueError(f"SUPABASE_KEY is malformed: length={len(key)}, looks like {kind}, "
+                         f"unexpected characters: {', '.join(bad) or 'none'}. Re-copy it with Supabase's copy button.")
+    if "wrong one" in kind:
+        log.warning("SUPABASE_KEY looks like a %s", kind)
+    else:
+        log.info("SUPABASE_KEY: %s, length %d", kind, len(key))
+    return key
+
+
 class DryRunSink:
     """Stand-in for Supabase that prints JSON lines (for local testing)."""
 
@@ -502,13 +536,18 @@ def run(args) -> int:
     if args.dry_run:
         sink = DryRunSink(open(args.out, "w", encoding="utf-8") if args.out else sys.stdout)
     else:
-        # .strip(): secrets pasted into GitHub often carry a trailing newline/space,
-        # which requests rejects as an invalid header value.
-        url = (os.environ.get("SUPABASE_URL") or "").strip()
-        key = (os.environ.get("SUPABASE_KEY") or "").strip()
-        if not url or not key:
+        url = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
+        key = os.environ.get("SUPABASE_KEY") or ""
+        if not url or not key.strip():
             log.error("SUPABASE_URL and SUPABASE_KEY must be set (or use --dry-run)")
             return 2
+        try:
+            key = clean_supabase_key(key)
+        except ValueError as ex:
+            log.error("%s", ex)
+            return 2
+        if not re.fullmatch(r"https://[a-z0-9-]+\.supabase\.(co|in)", url):
+            log.warning("SUPABASE_URL doesn't look like https://<ref>.supabase.co — check the secret")
         sink = Supabase(url, key)
 
     today = dt.date.today()
