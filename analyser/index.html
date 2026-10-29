@@ -65,6 +65,9 @@ input[type=search],select{font:14px var(--sans);min-height:38px;padding:0 10px;b
 a{color:var(--accent)}
 .civn{border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;background:var(--soft)}
 .hidden{display:none!important}
+pre.snip{margin:4px 0 0;padding:8px 10px;background:var(--soft);border:1px solid var(--line);border-radius:6px;font:12px/1.45 var(--mono);overflow-x:auto;white-space:pre}
+ol.flow{margin:6px 0 0;padding-left:22px;display:flex;flex-direction:column;gap:8px}
+ol.flow li{padding-left:4px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 </head>
@@ -344,9 +347,21 @@ function mkSarifComp(pkg) {
 function parseSARIF(doc) {
   const runs = doc.runs || []; const findings = []; const compMap = new Map(); const vmap = new Map(); const times = []; let fixedInBaseline = 0;
   const tools = runs.map((r) => { const d = (r.tool && r.tool.driver) || {}; return [d.name, d.semanticVersion || d.version].filter(Boolean).join(' ') || 'unknown tool'; });
+  const root = { schema: doc.$schema || null, version: doc.version || null, runs: [] }; const ruleDefs = [];
   runs.forEach((run, ri) => {
     const d = (run.tool && run.tool.driver) || {}; const ruleList = d.rules || []; const rules = new Map();
     [d].concat((run.tool && run.tool.extensions) || []).forEach((c) => (c.rules || []).forEach((r) => rules.set(r.id, r)));
+    const exts = (run.tool && run.tool.extensions) || [];
+    root.runs.push({ tool: tools[ri], name: d.name || null, version: d.semanticVersion || d.version || null, organization: d.organization || null, informationUri: d.informationUri || null,
+      rules: ruleList.length, extRules: exts.reduce((a, x) => a + (x.rules || []).length, 0), extensions: exts.map((x) => x.name).filter(Boolean), results: (run.results || []).length,
+      ok: (run.invocations || []).every((inv) => inv.executionSuccessful !== false), hasInvocation: !!(run.invocations || []).length });
+    [{ name: d.name, rules: ruleList }].concat(exts.map((x) => ({ name: x.name, rules: x.rules || [] }))).forEach((comp) => comp.rules.forEach((r) => {
+      const p = r.properties || {}; const tg = [].concat(p.tags || []).map(String);
+      ruleDefs.push({ run: ri, tool: tools[ri], component: comp.name || '', id: r.id || '', name: r.name || '', short: sarifText(r.shortDescription), full: sarifText(r.fullDescription),
+        help: !!(r.help && (r.help.text || r.help.markdown)), helpUri: r.helpUri || null, level: r.defaultConfiguration && r.defaultConfiguration.level || null,
+        enabled: !(r.defaultConfiguration && r.defaultConfiguration.enabled === false), secSev: p['security-severity'] != null ? parseFloat(p['security-severity']) : null,
+        cwe: uniq(tg.filter((t) => /cwe/i.test(t)).map((t) => t.replace(/^external\/cwe\//i, '').toUpperCase())), security: tg.some((t) => /security/i.test(t)), count: 0 });
+    }));
     (run.invocations || []).forEach((inv) => [inv.startTimeUtc, inv.endTimeUtc].forEach((t) => { if (t && !isNaN(Date.parse(t))) times.push(t); }));
     (run.results || []).forEach((res) => {
       if (res.baselineState === 'absent') { fixedInBaseline++; return; }
@@ -365,6 +380,18 @@ function parseSARIF(doc) {
       const cve = ids.find((x) => /^CVE-/.test(x)) || null;
       const f = { tool: tools[ri], ruleId, ids, kind: isVuln ? 'vuln' : 'code', sev, pkg, where, message: sarifText(res.message),
         suppressed: !!supp, justification: supp ? (supp.justification || '') : '', cwe: uniq(tags.filter((t) => /cwe/i.test(t)).map((t) => t.replace(/^external\/cwe\//i, '').toUpperCase())), v: null };
+      // static-analysis detail: rule link, level, exact region, snippet, code flows
+      const reg = loc.region || {};
+      Object.assign(f, { run: ri, tags, ruleKnown: !!rule, ruleName: (rule && rule.name) || '', ruleShort: sarifText(rule && rule.shortDescription),
+        linkVia: res.ruleId != null ? (idx != null ? 'ruleId + ruleIndex' : 'ruleId') : idx != null ? 'ruleIndex' : res.rule ? 'rule reference' : 'none',
+        level: res.level || (rule && rule.defaultConfiguration && rule.defaultConfiguration.level) || 'warning', levelExplicit: !!res.level, hasMessage: !!sarifText(res.message),
+        uri: sarifUri(loc.artifactLocation), region: { sl: reg.startLine, sc: reg.startColumn, el: reg.endLine, ec: reg.endColumn },
+        snippet: (reg.snippet && reg.snippet.text) || (loc.contextRegion && loc.contextRegion.snippet && loc.contextRegion.snippet.text) || '',
+        flows: (res.codeFlows || []).map((cf) => ({ message: sarifText(cf.message), threads: (cf.threadFlows || []).map((tf) => (tf.locations || []).map((tl) => {
+          const l = tl.location || {}; const p = l.physicalLocation || {}; const r = p.region || {};
+          return { uri: sarifUri(p.artifactLocation), line: r.startLine, col: r.startColumn, msg: sarifText(l.message), snippet: (r.snippet && r.snippet.text) || '' };
+        })) })) });
+      const rd = ruleDefs.find((x) => x.run === ri && x.id === ruleId); if (rd) rd.count++;
       if (isVuln) {
         const key = pkg.name ? pkg.name + '@' + (pkg.version || '') : '(package not stated)';
         if (!compMap.has(key)) compMap.set(key, mkSarifComp(pkg));
@@ -379,8 +406,9 @@ function parseSARIF(doc) {
   });
   times.sort();
   const meta = { format: 'SARIF ' + (doc.version || ''), specVersion: doc.version || '', serial: '', timestamp: times[times.length - 1] || null, authors: [], tools, creatorContact: null, root: null, signed: false, hasCompositions: false };
-  return { meta, comps: Array.from(compMap.values()), findings, fixedInBaseline, docDepsCount: 0 };
+  return { meta, comps: Array.from(compMap.values()), findings, fixedInBaseline, docDepsCount: 0, root, ruleDefs };
 }
+function sarifUri(al) { return al && al.uri ? String(al.uri).replace(/^file:\/\/\/?/i, '/').replace(/^\.\//, '') : ''; }
 
 /* ---------- CERT-In fields ---------- */
 const CERTIN = [
@@ -737,7 +765,7 @@ function machineChecks(ms) {
 /* ---------- rendering ---------- */
 let STATE = null; let TAB = 'overview';
 function tabsFor(state) {
-  if (state.kind === 'sarif') return [['overview', 'Overview'], ['findings', 'Findings'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST']];
+  if (state.kind === 'sarif') return [['overview', 'Overview'], ['static', 'Static Analysis'], ['findings', 'Findings'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST']];
   return state.kind === 'machines'
     ? [['overview', 'Overview'], ['certin', 'CERT-In 21 fields'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST']]
     : [['overview', 'Overview'], ['certin', 'CERT-In 21 fields'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST'], ['comps', 'Components']];
@@ -863,13 +891,14 @@ function sarifNistChecks(s) {
   const fixable = cves.filter((x) => x.fixed.length);
   out.push(['Patchable vulnerabilities remediated', 'NIST SP 800-40 r4', fixable.length ? 'fail' : 'pass', cves.length ? fixable.length + ' of ' + cves.length + ' vulnerabilities have an available fix' : 'No open vulnerabilities']);
   const code = s.findings.filter((f) => f.kind === 'code').length;
-  if (code) out.push(['Code-scanning findings', 'NIST SP 800-218 PW.7 / PW.8', 'info', code + ' code findings are listed under Findings; this tool assesses dependency vulnerabilities only']);
+  if (code) out.push(['Code-scanning findings', 'NIST SP 800-218 PW.7 / PW.8', 'info', code + ' code-scanning findings: see the Static Analysis tab for where they are and how to fix them']);
   return out;
 }
 function renderSarif(tab) {
   const s = STATE;
   if (tab === 'cves') return renderCves();
   if (tab === 'findings') return renderFindings();
+  if (tab === 'static') return renderStatic();
   if (tab === 'cra') return '<div class="card"><h2>EU Cyber Resilience Act</h2><p class="muted">Vulnerability-handling duties in Annex I and Art. 14, judged from this scan. Reporting of actively exploited vulnerabilities applies from 11 Sep 2026; the remaining obligations from 11 Dec 2027.</p>' + checksTable(sarifCraChecks(s)) + '</div>';
   if (tab === 'nist') return '<div class="card"><h2>NIST</h2><p class="muted">NIST SP 800-218 (SSDF) vulnerability-response practices, SP 800-40 r4 (patching) and SP 800-53 r5 RA-5 (vulnerability scanning).</p>' + checksTable(sarifNistChecks(s)) + '</div>';
   const open = sarifOpen(s); const cves = Array.from(s.cves.values());
@@ -880,7 +909,7 @@ function renderSarif(tab) {
   return '<div class="card"><h2>' + esc(s.fileName) + '</h2><p class="muted">' + esc(s.meta.format) + ' · ' + esc(s.meta.tools.join(', ')) + ' · scanned ' + esc(s.meta.timestamp || 'at an unknown time') + '</p>' +
     '<div class="grid">' + stat(fmt(open.length), 'Open vulnerability findings') + stat(fmt(cves.length), 'Unique vulnerabilities (' + sevCount('critical') + ' critical, ' + sevCount('high') + ' high)') +
     stat(fmt(cves.filter((x) => x.civn.length).length), 'With a CERT-In note') + stat(fmt(cves.filter((x) => x.fixed.length).length), 'Have a fixed version') +
-    stat(fmt(supp), 'Suppressed (accepted risk)') + stat(fmt(code), 'Code findings (not assessed)') + '</div>' +
+    stat(fmt(supp), 'Suppressed (accepted risk)') + stat(fmt(code), 'Code findings (see Static Analysis)') + '</div>' +
     (s.notes.length ? '<div class="note warn">' + s.notes.map(esc).join('<br>') + '</div>' : '') +
     (!s.online ? '<div class="note">Online look-ups are off, so EPSS, CERT-In notes and missing scores or fixes are not filled in. Tick “Look up missing data online” and reload the file.</div>' : '') +
     (s.fixedInBaseline ? '<div class="note">' + fmt(s.fixedInBaseline) + ' result(s) marked as fixed since the previous scan (baselineState “absent”) were left out.</div>' : '') +
@@ -904,6 +933,127 @@ function renderFindings() {
         '<td class="mono" style="word-break:break-all">' + esc(f.where || '—') + '</td>' +
         '<td>' + (f.suppressed ? pill('na', 'Suppressed') + '<div class="src">' + esc(f.justification || 'no justification given') + '</div>' : '') + (f.cwe.length ? '<div class="src">' + esc(f.cwe.join(', ')) + '</div>' : '') + '<div class="src">' + esc(((v && v.summary) || f.message.split('\n')[0]).slice(0, 400)) + '</div></td></tr>';
     }).join('') + '</tbody></table></div>' + (list.length > 500 ? '<p class="muted">Showing 500 of ' + fmt(list.length) + '. Download the CSV for all.</p>' : '')) + '</div>';
+}
+
+/* ---------- Static Analysis tab (SARIF) ----------
+   Hotspots answer "where did developers write insecure or buggy code?": code-scanning results only
+   (dependency findings point at manifests, not hand-written code). Risk points per finding = the
+   rule's security-severity when given, otherwise error 7 / warning 4 / note 1 / none 0. */
+const LEVEL_PTS = { error: 7, warning: 4, note: 1, none: 0 };
+const riskPts = (f) => f.sev.score != null ? f.sev.score : (LEVEL_PTS[f.level] != null ? LEVEL_PTS[f.level] : 4);
+const isSecurity = (f) => f.sev.score != null || f.cwe.length > 0 || (f.tags || []).some((t) => /security/i.test(t));
+const levelCls = (l) => l === 'error' ? 'fail' : l === 'warning' ? 'warn' : l === 'note' ? 'info' : 'na';
+const dirOf = (u) => u && u.includes('/') ? u.slice(0, u.lastIndexOf('/')) : '(root)';
+function fmtRegion(r) {
+  if (!r || !r.sl) return '';
+  let t = 'L' + r.sl + (r.sc ? ':C' + r.sc : '');
+  if (r.el && (r.el !== r.sl || r.ec)) t += '–L' + r.el + (r.ec ? ':C' + r.ec : '');
+  return t;
+}
+function barList(items, max, label) {
+  return '<div style="display:flex;flex-direction:column;gap:8px">' + items.map((it) =>
+    '<div><div class="row" style="justify-content:space-between;gap:8px"><span class="mono" style="word-break:break-all">' + esc(it.label) + '</span><span class="src">' + esc(it.note) + '</span></div>' +
+    '<div class="bar" role="img" aria-label="' + esc(it.label + ': ' + it.note) + '"><i style="width:' + Math.max(2, Math.round(it.value / (max || 1) * 100)) + '%;background:' + (it.color || 'var(--fail)') + '"></i></div></div>').join('') + '</div>' +
+    (label ? '<p class="src">' + esc(label) + '</p>' : '');
+}
+function renderStatic() {
+  const s = STATE;
+  return staticHotspots(s) + staticRoot(s) + staticRules(s) + staticResults(s) + staticFlows(s);
+}
+function staticHotspots(s) {
+  const code = s.findings.filter((f) => f.kind === 'code' && !f.suppressed);
+  const supp = s.findings.filter((f) => f.kind === 'code' && f.suppressed).length;
+  const head = '<div class="card" style="border-color:var(--accent)"><h2>Where did developers write insecure or buggy code?</h2>' +
+    '<p class="muted">Code-scanning results grouped by folder and file, ranked by risk points (the rule’s security-severity when the scanner gives one, otherwise error 7 · warning 4 · note 1). Dependency findings point at manifests, not hand-written code, so they are under Findings.</p>';
+  if (!code.length) return head + '<div class="note">No code-scanning results in this file' + (supp ? ' (' + supp + ' suppressed)' : '') + '. Upload SARIF from a code scanner such as CodeQL, Semgrep or SonarQube to see hotspots.</div></div>';
+  const files = new Map();
+  code.forEach((f) => { const k = f.uri || '(no location)'; if (!files.has(k)) files.set(k, []); files.get(k).push(f); });
+  const fileRows = Array.from(files.entries()).map(([uri, fs]) => ({ uri, fs, pts: fs.reduce((a, f) => a + riskPts(f), 0), sec: fs.filter(isSecurity).length,
+    err: fs.filter((f) => f.level === 'error').length, warn: fs.filter((f) => f.level === 'warning').length, note: fs.filter((f) => f.level === 'note' || f.level === 'none').length }))
+    .sort((a, b) => b.pts - a.pts || b.fs.length - a.fs.length);
+  const dirs = new Map(); fileRows.forEach((r) => { const k = dirOf(r.uri); const d = dirs.get(k) || { pts: 0, n: 0, files: 0 }; d.pts += r.pts; d.n += r.fs.length; d.files++; dirs.set(k, d); });
+  const dirRows = Array.from(dirs.entries()).sort((a, b) => b[1].pts - a[1].pts).slice(0, 8);
+  const ruleCount = new Map(); code.forEach((f) => { const k = f.ruleId; const r = ruleCount.get(k) || { n: 0, files: new Set(), f }; r.n++; r.files.add(f.uri); ruleCount.set(k, r); });
+  const topRules = Array.from(ruleCount.entries()).sort((a, b) => b[1].n - a[1].n).slice(0, 10);
+  const secN = code.filter(isSecurity).length; const top = fileRows[0];
+  return head +
+    '<div class="grid">' + stat(fmt(code.length), 'Code findings (' + secN + ' security, ' + (code.length - secN) + ' quality)') + stat(fmt(fileRows.length), 'Files affected') +
+    stat(fmt(code.filter((f) => f.level === 'error').length), 'At error level') + stat(fmt(code.filter((f) => f.flows.length).length), 'With a traced data flow') + '</div>' +
+    '<div class="note warn"><b>Biggest hotspot:</b> <span class="mono">' + esc(top.uri) + '</span> — ' + top.fs.length + ' finding(s), ' + Math.round(top.pts * 10) / 10 + ' risk points, lines ' + esc(uniq(top.fs.map((f) => f.region.sl)).sort((a, b) => a - b).slice(0, 8).join(', ') || '—') + '.</div>' +
+    (supp ? '<p class="src">' + supp + ' suppressed code finding(s) are not counted.</p>' : '') +
+    '<h3>Folders</h3>' + barList(dirRows.map(([k, d]) => ({ label: k, value: d.pts, note: d.n + ' finding(s) in ' + d.files + ' file(s) · ' + Math.round(d.pts * 10) / 10 + ' pts' })), dirRows[0][1].pts) +
+    '<h3>Files</h3><div class="tbl"><table><thead><tr><th>File</th><th class="num">Findings</th><th>Levels</th><th class="num">Security</th><th class="num">Risk points</th><th>Lines</th><th>Most frequent issue</th></tr></thead><tbody>' +
+    fileRows.slice(0, 25).map((r) => { const rc = new Map(); r.fs.forEach((f) => rc.set(f.ruleId, (rc.get(f.ruleId) || 0) + 1)); const tr = Array.from(rc.entries()).sort((a, b) => b[1] - a[1])[0];
+      return '<tr><td class="mono" style="word-break:break-all;min-width:200px">' + esc(r.uri) + '</td><td class="num">' + r.fs.length + '</td><td>' + (r.err ? pill('fail', r.err + ' error') + ' ' : '') + (r.warn ? pill('warn', r.warn + ' warning') + ' ' : '') + (r.note ? pill('info', r.note + ' note') : '') + '</td><td class="num">' + r.sec + '</td><td class="num">' + Math.round(r.pts * 10) / 10 + '</td><td class="mono">' + esc(uniq(r.fs.map((f) => f.region.sl)).sort((a, b) => a - b).slice(0, 8).join(', ') || '—') + '</td><td>' + esc(tr[0]) + (tr[1] > 1 ? ' ×' + tr[1] : '') + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+    (fileRows.length > 25 ? '<p class="src">Top 25 of ' + fileRows.length + ' files shown.</p>' : '') +
+    '<h3>Most frequent weaknesses</h3><div class="tbl"><table><thead><tr><th>Rule</th><th>What it means</th><th>CWE</th><th class="num">Findings</th><th class="num">Files</th></tr></thead><tbody>' +
+    topRules.map(([id, r]) => '<tr><td class="mono">' + esc(id) + '</td><td>' + esc(r.f.ruleShort || r.f.ruleName || '—') + '</td><td class="mono">' + esc(r.f.cwe.join(', ') || '—') + '</td><td class="num">' + r.n + '</td><td class="num">' + r.files.size + '</td></tr>').join('') + '</tbody></table></div>' +
+    '<h3>Findings by file</h3>' + fileRows.slice(0, 50).map((r, i) => '<details' + (i === 0 ? ' open' : '') + '><summary><span class="mono">' + esc(r.uri) + '</span> <span class="src">' + r.fs.length + ' finding(s)</span></summary><div style="display:flex;flex-direction:column;gap:10px">' +
+      r.fs.slice().sort((a, b) => (a.region.sl || 0) - (b.region.sl || 0)).map(staticFindingBlock).join('') + '</div></details>').join('') + '</div>';
+}
+function staticFindingBlock(f) {
+  return '<div class="civn" style="background:var(--surface)"><div class="row" style="gap:8px">' + pill(levelCls(f.level), f.level.toUpperCase()) + (f.sev.score != null ? pill(sevClass(f.sev.severity), 'security-severity ' + f.sev.score) : '') +
+    '<b class="mono">' + esc(f.ruleId) + '</b><span class="mono muted">' + esc(fmtRegion(f.region) || 'no region') + '</span>' + (f.cwe.length ? '<span class="src">' + esc(f.cwe.join(', ')) + '</span>' : '') + '</div>' +
+    '<span>' + esc(f.message || '(no message)') + '</span>' + (f.ruleShort ? '<span class="src">Rule: ' + esc(f.ruleShort) + '</span>' : '') +
+    (f.snippet ? '<pre class="snip">' + esc(f.snippet) + '</pre>' : '') + (f.flows.length ? flowBlock(f) : '') + '</div>';
+}
+function flowBlock(f) {
+  return f.flows.map((cf, ci) => cf.threads.map((steps, ti) => '<details><summary>Data flow' + (f.flows.length > 1 || cf.threads.length > 1 ? ' ' + (ci + 1) + '.' + (ti + 1) : '') + ': ' + steps.length + ' step(s), source → sink' + (cf.message ? ' — ' + esc(cf.message) : '') + '</summary><div><ol class="flow">' +
+    steps.map((st, k) => '<li><span class="pill ' + (k === 0 ? 'p-warn' : k === steps.length - 1 ? 'p-fail' : 'p-na') + '">' + (k === 0 ? 'Source' : k === steps.length - 1 ? 'Sink' : 'Step ' + k) + '</span> <span class="mono">' + esc(st.uri || '?') + (st.line ? ':' + st.line + (st.col ? ':' + st.col : '') : '') + '</span>' +
+      (st.msg ? '<div>' + esc(st.msg) + '</div>' : '') + (st.snippet ? '<pre class="snip">' + esc(st.snippet) + '</pre>' : '') + '</li>').join('') + '</ol></div></details>').join('')).join('');
+}
+function staticRoot(s) {
+  const r = s.root; const rows = [];
+  rows.push(['$schema declared', 'SARIF 2.1.0 §3.13.3', r.schema ? (/sarif[-_.]?2\.1\.0/i.test(r.schema) ? 'pass' : 'warn') : 'warn', r.schema || 'Missing (recommended, e.g. https://json.schemastore.org/sarif-2.1.0.json)']);
+  rows.push(['version is 2.1.0', 'SARIF 2.1.0 §3.13.2', r.version === '2.1.0' ? 'pass' : r.version ? 'warn' : 'fail', r.version || 'Missing (required)']);
+  rows.push(['runs array present', 'SARIF 2.1.0 §3.13.4', r.runs.length ? 'pass' : 'fail', r.runs.length + ' run(s)']);
+  r.runs.forEach((x, i) => {
+    const p = 'Run ' + (i + 1) + ': ';
+    rows.push([p + 'tool.driver.name', '§3.19.8', x.name ? 'pass' : 'fail', x.name || 'Missing (required)']);
+    rows.push([p + 'tool version', '§3.19.12–13', x.version ? 'pass' : 'warn', x.version || 'No version or semanticVersion']);
+    rows.push([p + 'organization', '§3.19.9', x.organization ? 'pass' : 'warn', x.organization || 'Not stated']);
+    rows.push([p + 'informationUri', '§3.19.17', x.informationUri ? 'pass' : 'warn', x.informationUri || 'Not stated']);
+    rows.push([p + 'rules array', '§3.19.23', x.rules || x.extRules ? 'pass' : 'warn', x.rules + ' rule(s) in the driver' + (x.extRules ? ', ' + x.extRules + ' in extensions (' + x.extensions.join(', ') + ')' : '') + ' · ' + x.results + ' result(s)']);
+    if (x.hasInvocation) rows.push([p + 'scan completed', '§3.20.14', x.ok ? 'pass' : 'fail', x.ok ? 'executionSuccessful' : 'The tool reported an unsuccessful run: results may be incomplete']);
+  });
+  return '<div class="card"><h2>1 · File metadata and tool identification</h2><p class="muted">Does the file identify itself, its schema version and the tool that produced it?</p>' + checksTable(rows) + '</div>';
+}
+function staticRules(s) {
+  const d = s.ruleDefs; const n = d.length;
+  if (!n) return '<div class="card"><h2>2 · Rule definitions</h2><div class="note warn">The file defines no rules, so results have no descriptions, help text or default severities to fall back on.</div></div>';
+  const cov = (fn, label, ref, required) => { const k = d.filter(fn).length; const p = pct(k, n); return [label, ref, required ? status(p) : p >= 95 ? 'pass' : 'warn', k + ' of ' + n + ' rules (' + p + '%)']; };
+  const rows = [cov((r) => r.id, 'Unique rule ID', '§3.49.3', true), cov((r) => r.name, 'Rule name', '§3.49.7', false), cov((r) => r.short, 'Short description', '§3.49.9', true),
+    cov((r) => r.full || r.help, 'Full description or help text', '§3.49.10, §3.49.13', false), cov((r) => r.helpUri, 'Help / documentation link', '§3.49.12', false),
+    cov((r) => r.level, 'Default level (defaultConfiguration.level)', '§3.49.14', false), cov((r) => r.secSev != null || r.cwe.length, 'Security severity or CWE mapping', 'GitHub security-severity / CWE tags', false)];
+  const dup = n - uniq(d.map((r) => r.run + '|' + r.id)).length;
+  if (dup) rows.push(['Rule IDs are unique within a run', '§3.49.3', 'fail', dup + ' duplicate ID(s)']);
+  const list = d.slice().sort((a, b) => b.count - a.count).slice(0, 300);
+  return '<div class="card"><h2>2 · Rule definitions</h2><p class="muted">Rules explain what each alert means, so platforms can show help text, links and severities.</p>' + checksTable(rows) +
+    '<details><summary>All ' + n + ' rule(s)</summary><div><div class="tbl"><table><thead><tr><th>Rule</th><th>Short description</th><th>Default level</th><th class="num">Sec. severity</th><th>CWE</th><th>Help</th><th class="num">Results</th></tr></thead><tbody>' +
+    list.map((r) => '<tr><td class="mono">' + esc(r.id) + (r.name ? '<div class="src">' + esc(r.name) + '</div>' : '') + '<div class="src">' + esc(r.tool) + '</div></td><td>' + esc(r.short || '—') + '</td><td>' + (r.level ? pill(levelCls(r.level), r.level) : '<span class="muted">not set (warning)</span>') + (r.enabled ? '' : ' <span class="src">disabled</span>') + '</td><td class="num">' + (r.secSev != null ? r.secSev : '—') + '</td><td class="mono">' + esc(r.cwe.join(', ') || '—') + '</td><td>' + (r.helpUri && /^https?:\/\//i.test(r.helpUri) ? '<a href="' + esc(r.helpUri) + '" target="_blank" rel="noopener">docs</a> ' : '') + (r.help || r.full ? '<span class="src">text</span>' : (r.helpUri ? '' : '<span class="muted">—</span>')) + '</td><td class="num">' + r.count + '</td></tr>').join('') +
+    '</tbody></table></div>' + (n > 300 ? '<p class="src">300 of ' + n + ' shown.</p>' : '') + '</div></details></div>';
+}
+function staticResults(s) {
+  const all = s.findings; const n = all.length;
+  if (!n) return '<div class="card"><h2>3 · Result details</h2><p class="muted">The file contains no results.</p></div>';
+  const cov = (fn, label, ref, required) => { const k = all.filter(fn).length; const p = pct(k, n); return [label, ref, required ? status(p) : p >= 95 ? 'pass' : 'warn', k + ' of ' + n + ' results (' + p + '%)']; };
+  const rows = [cov((f) => f.ruleKnown, 'Linked to a defined rule (ruleId / ruleIndex)', '§3.27.5–7', true), cov((f) => f.hasMessage, 'Message explaining the specific violation', '§3.27.11', true),
+    cov((f) => f.levelExplicit, 'Level stated on the result', '§3.27.10', false), cov((f) => f.uri, 'Physical location: file URI', '§3.28.3, §3.4', true),
+    cov((f) => f.region.sl, 'Region: start line', '§3.30.5', true), cov((f) => f.region.sc, 'Region: start column', '§3.30.6', false), cov((f) => f.region.el, 'Region: end line', '§3.30.7', false),
+    cov((f) => f.region.ec, 'Region: end column', '§3.30.8', false), cov((f) => f.snippet, 'Code snippet', '§3.30.13', false)];
+  const lv = {}; all.forEach((f) => { lv[f.level] = (lv[f.level] || 0) + 1; });
+  const via = {}; all.forEach((f) => { via[f.linkVia] = (via[f.linkVia] || 0) + 1; });
+  return '<div class="card"><h2>3 · Result details</h2><p class="muted">How precisely each result points at the code. Start line, file and message let an IDE underline the exact spot; columns and snippets make it survive file moves.</p>' + checksTable(rows) +
+    '<p class="src">Levels: ' + esc(Object.entries(lv).map(([k, v]) => k + ' ' + v).join(' · ')) + ' (results without a level take the rule default, else “warning”). Rule links: ' + esc(Object.entries(via).map(([k, v]) => k + ' ' + v).join(' · ')) + '.</p></div>';
+}
+function staticFlows(s) {
+  const withF = s.findings.filter((f) => f.flows.length);
+  const steps = withF.reduce((a, f) => a + f.flows.reduce((b, cf) => b + cf.threads.reduce((c, t) => c + t.length, 0), 0), 0);
+  return '<div class="card"><h2>4 · Code flows and data flows</h2><p class="muted">For taint-style bugs, a code flow traces untrusted input from its source, through intermediate steps, to the sink where it does damage.</p>' +
+    (!withF.length ? '<div class="note">No results in this file carry codeFlows. Data-flow traces are produced by advanced SAST tools (for example CodeQL path queries) for issues like injection.</div></div>' :
+    '<div class="grid">' + stat(fmt(withF.length), 'Results with a traced flow') + stat(fmt(steps), 'Flow steps in total') + stat(fmt(uniq(withF.map((f) => f.ruleId)).length), 'Rules with flows') + '</div>' +
+    withF.slice(0, 50).map((f) => '<details><summary><span class="mono">' + esc(f.ruleId) + '</span> · <span class="mono">' + esc((f.uri || '?') + (f.region.sl ? ':' + f.region.sl : '')) + '</span></summary><div>' + '<p>' + esc(f.message) + '</p>' + flowBlock(f) + '</div></details>').join('') +
+    (withF.length > 50 ? '<p class="src">50 of ' + withF.length + ' shown.</p>' : '') + '</div>');
 }
 
 /* ---------- export ---------- */
@@ -978,8 +1128,25 @@ const SAMPLE_SARIF = {
         { ruleId: 'CVE-2024-29041', ruleIndex: 2, level: 'warning', message: { text: 'Package: express\nInstalled Version: 4.17.1\nVulnerability CVE-2024-29041\nSeverity: MEDIUM\nFixed Version: 4.19.2, 5.0.0-beta.3' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/package-lock.json' }, region: { startLine: 1 } } }],
           suppressions: [{ kind: 'external', status: 'accepted', justification: 'Redirect helper not used by this service' }] }
       ] },
-    { tool: { driver: { name: 'CodeQL', semanticVersion: '2.19.0', rules: [{ id: 'js/sql-injection', shortDescription: { text: 'Database query built from user-controlled sources' }, properties: { 'security-severity': '8.8', tags: ['security', 'external/cwe/cwe-089'] } }] } },
-      results: [{ ruleId: 'js/sql-injection', ruleIndex: 0, level: 'error', message: { text: 'This query depends on a user-provided value.' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/src/routes/search.js' }, region: { startLine: 42 } } }] }] }
+    { tool: { driver: { name: 'CodeQL', semanticVersion: '2.19.0', organization: 'GitHub', informationUri: 'https://codeql.github.com', rules: [
+        { id: 'js/sql-injection', name: 'SqlInjection', shortDescription: { text: 'Database query built from user-controlled sources' }, fullDescription: { text: 'Building a database query from user-controlled sources is vulnerable to insertion of malicious code by the user.' }, help: { text: 'Use parameterised queries (placeholders) instead of string concatenation.' }, helpUri: 'https://codeql.github.com/codeql-query-help/javascript/js-sql-injection/', defaultConfiguration: { level: 'error' }, properties: { 'security-severity': '8.8', tags: ['security', 'external/cwe/cwe-089'] } },
+        { id: 'js/reflected-xss', name: 'ReflectedXss', shortDescription: { text: 'Reflected cross-site scripting' }, help: { text: 'Encode user input before writing it into the page.' }, defaultConfiguration: { level: 'error' }, properties: { 'security-severity': '6.1', tags: ['security', 'external/cwe/cwe-079'] } },
+        { id: 'js/unused-local-variable', name: 'UnusedVariable', shortDescription: { text: 'Unused variable, import, function or class' }, defaultConfiguration: { level: 'note' }, properties: { tags: ['maintainability'] } }
+      ] } },
+      invocations: [{ executionSuccessful: true, endTimeUtc: '2026-10-28T09:42:00Z' }],
+      results: [
+        { ruleId: 'js/sql-injection', ruleIndex: 0, level: 'error', message: { text: 'Unsanitized input from req.query.q flows directly into a SQL query.' },
+          locations: [{ physicalLocation: { artifactLocation: { uri: 'web/src/db/search.js' }, region: { startLine: 15, startColumn: 18, endLine: 15, endColumn: 31, snippet: { text: '  return db.query(sql);' } } } }],
+          codeFlows: [{ threadFlows: [{ locations: [
+            { location: { physicalLocation: { artifactLocation: { uri: 'web/src/routes/search.js' }, region: { startLine: 12, startColumn: 17, snippet: { text: '  const term = req.query.q;' } } }, message: { text: 'req.query.q (user input)' } } },
+            { location: { physicalLocation: { artifactLocation: { uri: 'web/src/routes/search.js' }, region: { startLine: 13, startColumn: 23, snippet: { text: '  const rows = await findProducts(term);' } } }, message: { text: 'term passed to findProducts' } } },
+            { location: { physicalLocation: { artifactLocation: { uri: 'web/src/db/search.js' }, region: { startLine: 14, startColumn: 15, snippet: { text: "  const sql = \"SELECT * FROM products WHERE name LIKE '%\" + term + \"%'\";" } } }, message: { text: 'concatenated into sql' } } },
+            { location: { physicalLocation: { artifactLocation: { uri: 'web/src/db/search.js' }, region: { startLine: 15, startColumn: 18, snippet: { text: '  return db.query(sql);' } } }, message: { text: 'executed as a query (sink)' } } }
+          ] }] }] },
+        { ruleId: 'js/sql-injection', ruleIndex: 0, message: { text: 'Request parameter id is concatenated into a SQL query.' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/src/db/admin.js' }, region: { startLine: 55, startColumn: 9, endLine: 55, endColumn: 60, snippet: { text: "  db.query('DELETE FROM users WHERE id = ' + req.params.id);" } } } }] },
+        { ruleId: 'js/reflected-xss', ruleIndex: 1, level: 'error', message: { text: 'Cross-site scripting: user-provided value req.query.name is written into the page.' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/src/routes/profile.js' }, region: { startLine: 28, startColumn: 12, snippet: { text: "  res.send('<h1>Hello ' + req.query.name + '</h1>');" } } } }] },
+        { ruleId: 'js/unused-local-variable', ruleIndex: 2, level: 'note', message: { text: 'Unused variable tmp.' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/src/util/format.js' }, region: { startLine: 3 } } }] }
+      ] }
   ]
 };
 
