@@ -72,17 +72,18 @@ a{color:var(--accent)}
 <div class="wrap">
   <header style="display:flex;flex-direction:column;gap:6px">
     <h1>BOM Compliance Checker</h1>
-    <p class="muted">Upload a CycloneDX or SPDX SBOM (JSON), or an IntelliXBOM machine export. The file is read in your browser. It is checked against CERT-In's 21 SBOM fields, CVEs with CERT-In vulnerability notes, the EU Cyber Resilience Act and NIST guidance.</p>
+    <p class="muted">Upload a CycloneDX or SPDX SBOM (JSON), a SARIF vulnerability scan, or an IntelliXBOM machine export. The file is read in your browser. It is checked against CERT-In's 21 SBOM fields, CVEs with CERT-In vulnerability notes, the EU Cyber Resilience Act and NIST guidance.</p>
   </header>
 
   <section class="card" aria-label="Upload">
     <label class="drop" id="drop" for="file">
-      <strong>Drop a JSON file here, or choose one</strong>
-      <span class="muted" style="font-size:13px">CycloneDX 1.4–1.6 · SPDX 2.x / 3.0 JSON · IntelliXBOM machine export</span>
-      <input id="file" type="file" accept=".json,application/json" class="hidden">
+      <strong>Drop a JSON or SARIF file here, or choose one</strong>
+      <span class="muted" style="font-size:13px">CycloneDX 1.4–1.6 · SPDX 2.x / 3.0 JSON · SARIF 2.1 vulnerability scans · IntelliXBOM machine export</span>
+      <input id="file" type="file" accept=".json,.sarif,application/json,application/sarif+json" class="hidden">
     </label>
     <div class="row">
       <button type="button" id="sampleBtn">Load an example SBOM</button>
+      <button type="button" id="sampleSarifBtn">Load an example SARIF scan</button>
       <label class="row" style="gap:8px;font-size:14px"><input type="checkbox" id="online" checked> Look up missing data online</label>
       <span class="muted" style="font-size:13px">Sends package IDs and CVE IDs (never the file) to OSV, deps.dev, ecosyste.ms, endoflife.date, FIRST EPSS and the CERT-In notes index.</span>
     </div>
@@ -173,6 +174,7 @@ function detect(doc) {
   if (doc && doc.bomFormat === 'CycloneDX') return 'cyclonedx';
   if (doc && (doc.spdxVersion || doc.SPDXID)) return 'spdx2';
   if (doc && (doc['@context'] && JSON.stringify(doc['@context']).includes('spdx') || Array.isArray(doc['@graph']))) return 'spdx3';
+  if (doc && Array.isArray(doc.runs) && (/^2\./.test(String(doc.version || '')) || /sarif/i.test(doc.$schema || ''))) return 'sarif';
   return 'unknown';
 }
 const F = (value, src, from) => ({ value: value === '' ? null : value, src: value == null || value === '' || (Array.isArray(value) && !value.length) ? 'missing' : src, from: from || null });
@@ -291,6 +293,93 @@ function parseSPDX3(doc) {
       hashAlgs: hashes.map((h) => h.toUpperCase()), vulns: [], isRootDep: false, crypto: null };
   });
   return { meta, comps, docDepsCount: rels.length };
+}
+
+/* ---------- SARIF 2.1 (vulnerability scan results) ----------
+   Reads dependency / container scan results (Trivy, Grype, OSV-Scanner, Snyk and similar).
+   Vulnerability IDs, packages, versions and fixed versions are taken only from what the scan states;
+   SARIF "level" (error/warning/note) is never treated as a CVSS severity. */
+const VULN_ID_RE = /\b(CVE-\d{4}-\d{4,7}|GHSA(?:-[23456789cfghjmpqrvwx]{4}){3})\b/gi;
+const sarifText = (m) => (m && (m.text || m.markdown)) || '';
+function sarifSeverity(rule, res) {
+  const p = Object.assign({}, rule && rule.properties, res.properties);
+  const raw = p['security-severity'] != null ? p['security-severity'] : p.cvssv3_baseScore != null ? p.cvssv3_baseScore : p.cvssScore;
+  const s = parseFloat(raw);
+  if (!isNaN(s) && s >= 0 && s <= 10) return { score: s, severity: sevFromScore(s), basis: 'scanner security-severity ' + s };
+  const tag = [].concat(p.tags || [], p.severity || []).map(String).find((t) => /^(critical|high|medium|moderate|low)$/i.test(t));
+  const word = tag || (/severity[:\s]+(critical|high|medium|moderate|low)\b/i.exec(sarifText(res.message)) || /\b(critical|high|medium|moderate|low) severity\b/i.exec(sarifText(rule && rule.shortDescription) + ' ' + sarifText(res.message)) || [])[1];
+  if (word) { const w = word.toLowerCase() === 'moderate' ? 'medium' : word.toLowerCase(); return { score: null, severity: w, basis: 'scanner severity label' }; }
+  return { score: null, severity: 'unknown', basis: 'no severity in the scan (SARIF level "' + (res.level || 'warning') + '" is not a CVSS rating)' };
+}
+function mdTableRow(md) {
+  const lines = (md || '').split('\n').map((l) => l.trim()).filter((l) => /^\|.*\|$/.test(l));
+  if (lines.length < 3) return null;
+  const cells = (l) => l.slice(1, -1).split('|').map((c) => c.trim());
+  const head = cells(lines[0]).map((x) => x.toLowerCase()); const row = cells(lines[2]); const o = {};
+  head.forEach((x, i) => { o[x] = row[i]; }); return o;
+}
+function sarifPackage(rule, res) {
+  const msg = sarifText(res.message);
+  const props = JSON.stringify([res.properties || {}, (rule && rule.properties) || {}]);
+  const purlM = /pkg:[a-z0-9.+-]+\/[^\s"'<>|)\\]+/i.exec(props + ' ' + msg);
+  const purl = purlM ? purlM[0].replace(/[.,;]$/, '') : null; const pp = purl ? parsePurl(purl) : null;
+  let name = null, version = null, fixed = null, m;
+  if (pp) { name = (pp.ns ? pp.ns + '/' : '') + pp.name; version = pp.version; }
+  if (!name && (m = /Package:\s*(\S+)/i.exec(msg))) { name = m[1]; const v = /Installed Version:\s*(\S+)/i.exec(msg); if (v) version = v[1]; }
+  if (!name && (m = /'(?:[a-z]+\/)?([^'@\s]+)@([^'\s]+)'/i.exec(msg))) { name = m[1]; version = m[2]; }
+  if (!name && (m = /reports\s+(\S+)\s+at version\s+(\S+)/i.exec(msg))) { name = m[1]; version = m[2]; }
+  const row = mdTableRow(rule && rule.help && rule.help.markdown);
+  if (row) { if (!name && row.package) name = row.package; if (!version && row.version) version = row.version; fixed = row['fixed version'] || row['fix version'] || row['fixed in'] || null; }
+  if (!name && (m = /introduces a vulnerable\s+(\S+)\s+package/i.exec(msg))) name = m[1];
+  const fm = /Fixed Version:\s*([^\n]+)/i.exec(msg); if (fm) fixed = fm[1].trim();
+  const pf = (res.properties || {}).fixedVersion || ((rule && rule.properties) || {}).fixedVersion; if (!fixed && pf) fixed = String(pf);
+  if (fixed && /^(none|n\/a|-|not fixed|won't fix|wont-fix)$/i.test(fixed)) fixed = null;
+  return { name, version: version ? version.replace(/[.,;]$/, '') : null, fixed, purl };
+}
+function mkSarifComp(pkg) {
+  const f = {}; CERTIN.forEach(([k]) => { f[k] = F(null, 'native'); });
+  f.name = F(pkg.name || '(package not stated)', 'native'); f.version = F(pkg.version, 'native');
+  return { key: (pkg.name || '?') + '@' + (pkg.version || ''), type: '', purl: pkg.purl, cpe: null, filename: null, f, hashAlgs: [], vulns: [], isRootDep: false, crypto: null };
+}
+function parseSARIF(doc) {
+  const runs = doc.runs || []; const findings = []; const compMap = new Map(); const vmap = new Map(); const times = []; let fixedInBaseline = 0;
+  const tools = runs.map((r) => { const d = (r.tool && r.tool.driver) || {}; return [d.name, d.semanticVersion || d.version].filter(Boolean).join(' ') || 'unknown tool'; });
+  runs.forEach((run, ri) => {
+    const d = (run.tool && run.tool.driver) || {}; const ruleList = d.rules || []; const rules = new Map();
+    [d].concat((run.tool && run.tool.extensions) || []).forEach((c) => (c.rules || []).forEach((r) => rules.set(r.id, r)));
+    (run.invocations || []).forEach((inv) => [inv.startTimeUtc, inv.endTimeUtc].forEach((t) => { if (t && !isNaN(Date.parse(t))) times.push(t); }));
+    (run.results || []).forEach((res) => {
+      if (res.baselineState === 'absent') { fixedInBaseline++; return; }
+      const idx = res.ruleIndex != null ? res.ruleIndex : res.rule && res.rule.index;
+      const ruleId = res.ruleId || (res.rule && res.rule.id) || (ruleList[idx] || {}).id || '(no rule)';
+      const rule = rules.get(ruleId) || ruleList[idx] || null;
+      const blob = [ruleId, rule && rule.name, sarifText(rule && rule.shortDescription), sarifText(res.message), JSON.stringify((rule && rule.properties) || {}), JSON.stringify(res.properties || {})].join(' ');
+      const ids = uniq((blob.match(VULN_ID_RE) || []).map((x) => /^cve/i.test(x) ? x.toUpperCase() : 'GHSA-' + x.slice(5).toLowerCase()));
+      const tags = [].concat(((rule && rule.properties) || {}).tags || [], (res.properties || {}).tags || []).map(String);
+      const pkg = sarifPackage(rule, res);
+      const isVuln = ids.length > 0 || (!!pkg.name && (tags.some((t) => /vulnerab|dependenc/i.test(t)) || /vulnerab/i.test(sarifText(rule && rule.shortDescription) + ' ' + sarifText(res.message))));
+      const sev = sarifSeverity(rule, res);
+      const loc = ((res.locations || [])[0] || {}).physicalLocation || {};
+      const where = ((loc.artifactLocation || {}).uri || '') + (loc.region && loc.region.startLine ? ':' + loc.region.startLine : '');
+      const supp = (res.suppressions || []).find((x) => !x.status || x.status === 'accepted');
+      const cve = ids.find((x) => /^CVE-/.test(x)) || null;
+      const f = { tool: tools[ri], ruleId, ids, kind: isVuln ? 'vuln' : 'code', sev, pkg, where, message: sarifText(res.message),
+        suppressed: !!supp, justification: supp ? (supp.justification || '') : '', cwe: uniq(tags.filter((t) => /cwe/i.test(t)).map((t) => t.replace(/^external\/cwe\//i, '').toUpperCase())), v: null };
+      if (isVuln) {
+        const key = pkg.name ? pkg.name + '@' + (pkg.version || '') : '(package not stated)';
+        if (!compMap.has(key)) compMap.set(key, mkSarifComp(pkg));
+        const c = compMap.get(key); const vid = cve || ids[0] || ruleId; const vk = key + '|' + vid;
+        let v = vmap.get(vk);
+        if (!v) { v = { id: vid, cve, aliases: ids.filter((x) => x !== vid), score: sev.score, severity: sev.severity, basis: sev.basis, summary: sarifText(rule && rule.shortDescription) || f.message.split('\n')[0], fixed: pkg.fixed ? [pkg.fixed] : [], src: 'native' }; vmap.set(vk, v); }
+        if (!supp && !c.vulns.includes(v)) c.vulns.push(v);
+        f.v = v;
+      }
+      findings.push(f);
+    });
+  });
+  times.sort();
+  const meta = { format: 'SARIF ' + (doc.version || ''), specVersion: doc.version || '', serial: '', timestamp: times[times.length - 1] || null, authors: [], tools, creatorContact: null, root: null, signed: false, hasCompositions: false };
+  return { meta, comps: Array.from(compMap.values()), findings, fixedInBaseline, docDepsCount: 0 };
 }
 
 /* ---------- CERT-In fields ---------- */
@@ -495,6 +584,40 @@ async function civnLookup(state, cveIds, tick) {
   }
 }
 
+/* Online look-ups for a SARIF scan: the scan already names the vulnerabilities, so only fill gaps
+   (score / fixed version from OSV.dev, labelled as such), then EPSS and CERT-In notes. */
+async function enrichSarif(state) {
+  STOP = false; $('#stopBtn').classList.remove('hidden');
+  const steps = 3; let step = 0; const tick = (t, f) => setStatus(t, (step + (f || 0)) / steps);
+  const need = uniq(state.comps.flatMap((c) => c.vulns.filter((v) => v.score == null || !v.fixed.length).map((v) => v.id))).filter((id) => /^(CVE|GHSA)-/i.test(id));
+  const list = need.slice(0, 300);
+  if (need.length > 300) state.notes.push('OSV.dev was asked about the first 300 of ' + need.length + ' vulnerabilities missing a score or fix.');
+  const det = new Map();
+  await pool(list, 8, async (id, k) => { const v = await getJSON('https://api.osv.dev/v1/vulns/' + encodeURIComponent(id)); if (v) det.set(id, v); if (k % 10 === 0) tick('Reading ' + list.length + ' advisories from OSV.dev for missing scores and fixes…', k / list.length); });
+  state.comps.forEach((c) => c.vulns.forEach((v) => {
+    const d = det.get(v.id); if (!d) return;
+    if (v.score == null) { const vec = (d.severity || []).find((x) => /CVSS_V3/.test(x.type)); const sc = vec ? cvss3(vec.score) : null; if (sc != null) { v.score = sc; v.severity = sevFromScore(sc); v.basis = 'CVSS ' + sc + ' from ' + SRC.osv; } }
+    if (!v.fixed.length) {
+      const nm = (c.f.name.value || '').toLowerCase().split(/[/:]/).pop();
+      const fx = uniq((d.affected || []).filter((a) => !a.package || !nm || (a.package.name || '').toLowerCase().split(/[/:]/).pop() === nm).flatMap((a) => (a.ranges || []).flatMap((r) => (r.events || []).map((e) => e.fixed))));
+      if (fx.length) { v.fixed = fx; v.fixedFrom = SRC.osv; }
+    }
+    if (!v.summary && d.summary) v.summary = d.summary;
+  }));
+  state.cves = new Map(); buildCves(state); step++;
+  const cveIds = Array.from(state.cves.keys()).filter((id) => /^CVE-/.test(id));
+  for (let i = 0; i < cveIds.length && !STOP; i += 80) {
+    tick('Reading exploit likelihood (EPSS) for ' + cveIds.length + ' CVEs…', i / Math.max(1, cveIds.length));
+    const r = await getJSON('https://api.first.org/data/v1/epss?cve=' + cveIds.slice(i, i + 80).join(','));
+    (r && r.data || []).forEach((d) => { const x = state.cves.get(d.cve); if (x) { x.epss = parseFloat(d.epss); x.epssPct = parseFloat(d.percentile); } });
+  }
+  step++;
+  await civnLookup(state, cveIds, (f, t) => tick(t, f));
+  step++;
+  $('#stopBtn').classList.add('hidden');
+  setStatus(STOP ? 'Look-ups stopped. Results show what was gathered.' : 'Done. Scan results and online look-ups are combined below.', 1);
+}
+
 /* ---------- CVE aggregation ---------- */
 function buildCves(state) {
   const m = state.cves || new Map();
@@ -614,6 +737,7 @@ function machineChecks(ms) {
 /* ---------- rendering ---------- */
 let STATE = null; let TAB = 'overview';
 function tabsFor(state) {
+  if (state.kind === 'sarif') return [['overview', 'Overview'], ['findings', 'Findings'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST']];
   return state.kind === 'machines'
     ? [['overview', 'Overview'], ['certin', 'CERT-In 21 fields'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST']]
     : [['overview', 'Overview'], ['certin', 'CERT-In 21 fields'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST'], ['comps', 'Components']];
@@ -623,7 +747,7 @@ function render() {
   $('#results').classList.remove('hidden');
   $('#tabs').innerHTML = tabsFor(STATE).map(([k, l]) => '<button type="button" role="tab" data-tab="' + k + '" aria-selected="' + (TAB === k) + '">' + esc(l) + '</button>').join('');
   const p = $('#panel');
-  p.innerHTML = STATE.kind === 'machines' ? renderMachines(TAB) : ({ overview: renderOverview, certin: renderCertIn, cves: renderCves, cra: renderCra, nist: renderNist, comps: renderComps }[TAB] || renderOverview)();
+  p.innerHTML = STATE.kind === 'machines' ? renderMachines(TAB) : STATE.kind === 'sarif' ? renderSarif(TAB) : ({ overview: renderOverview, certin: renderCertIn, cves: renderCves, cra: renderCra, nist: renderNist, comps: renderComps }[TAB] || renderOverview)();
 }
 function checksTable(rows) {
   const c = { pass: 0, warn: 0, fail: 0, info: 0, na: 0 }; rows.forEach((r) => c[r[2]]++);
@@ -668,7 +792,7 @@ function srcBadge(f) { if (f.src === 'native') return pill('pass', 'In file') + 
 
 function renderCves() {
   const s = STATE; const cves = Array.from(s.cves.values()).sort((a, b) => ((b.epss || 0) - (a.epss || 0)) || ((b.score || 0) - (a.score || 0)));
-  if (!cves.length) return '<div class="card"><h2>CVEs</h2><p>No vulnerabilities were found' + (s.online ? ' in the file or on OSV.dev for components with a PURL.' : ' in the file. Turn on online look-ups to check OSV.dev.') + '</p></div>';
+  if (!cves.length) return '<div class="card"><h2>CVEs</h2><p>No vulnerabilities were found' + (s.kind === 'sarif' ? ' in this scan (suppressed findings are listed under Findings).' : s.online ? ' in the file or on OSV.dev for components with a PURL.' : ' in the file. Turn on online look-ups to check OSV.dev.') + '</p></div>';
   const withNotes = cves.filter((x) => x.civn.length);
   const filt = s.cveFilter || 'all';
   const shown = cves.filter((x) => filt === 'all' || (filt === 'notes' && x.civn.length) || (filt === 'crit' && (x.severity === 'critical' || x.severity === 'high')));
@@ -676,12 +800,13 @@ function renderCves() {
   return '<div class="card"><h2>' + fmt(cves.length) + ' CVEs · ' + fmt(withNotes.length) + ' have a CERT-In vulnerability note</h2><p class="muted">Sorted by exploit likelihood (EPSS), then CVSS. CERT-In notes are matched by CVE ID in the Sukhi CVIN index of cert-in.org.in notes.</p>' +
     '<div class="row"><select id="cveFilter" aria-label="Filter CVEs"><option value="all"' + (filt === 'all' ? ' selected' : '') + '>All CVEs</option><option value="notes"' + (filt === 'notes' ? ' selected' : '') + '>Only CVEs with a CERT-In note</option><option value="crit"' + (filt === 'crit' ? ' selected' : '') + '>Critical and high</option></select><button type="button" data-export="cves">Download CSV</button></div>' +
     '<div class="tbl"><table><thead><tr><th>CVE</th><th>Severity</th><th class="num">CVSS</th><th class="num">EPSS</th><th>Components</th><th>Fix</th><th>CERT-In note</th></tr></thead><tbody>' +
-    shown.slice(0, 400).map((x) => '<tr><td class="mono"><a href="https://nvd.nist.gov/vuln/detail/' + encodeURIComponent(x.id) + '" target="_blank" rel="noopener">' + esc(x.id) + '</a>' + (x.other.length ? '<div class="src">' + esc(x.other.slice(0, 2).join(', ')) + '</div>' : '') + '<div class="src">' + (x.src === 'native' ? 'listed in file' : 'found via OSV.dev') + '</div></td>' +
+    shown.slice(0, 400).map((x) => '<tr><td class="mono"><a href="' + vulnLink(x.id) + '" target="_blank" rel="noopener">' + esc(x.id) + '</a>' + (x.other.length ? '<div class="src">' + esc(x.other.slice(0, 2).join(', ')) + '</div>' : '') + '<div class="src">' + (x.src === 'native' ? 'listed in file' : 'found via OSV.dev') + '</div></td>' +
       '<td>' + pill(sevCls(x.severity), (x.severity || 'unknown').toUpperCase()) + '</td><td class="num">' + (x.score != null ? x.score : '—') + '</td><td class="num">' + (x.epss != null ? (x.epss * 100).toFixed(1) + '%' : '—') + '</td>' +
       '<td>' + esc(x.comps.slice(0, 3).join(', ') + (x.comps.length > 3 ? ' +' + (x.comps.length - 3) : '')) + '</td><td>' + (x.fixed.length ? esc(x.fixed.slice(0, 3).join(', ')) : '<span class="muted">none listed</span>') + '</td>' +
       '<td>' + (x.civn.length ? x.civn.map((n) => '<div class="civn"><a href="' + esc(safeUrl(n.source_url)) + '" target="_blank" rel="noopener"><b>' + esc(n.civn_id) + '</b></a><span>' + esc(n.title) + '</span><span class="src">' + esc((n.severity || '') + ' · ' + (n.published_date || '')) + '</span>' + (n.solution ? '<span class="src">Solution: ' + esc(n.solution.slice(0, 220)) + (n.solution.length > 220 ? '…' : '') + '</span>' : '') + '</div>').join('') : (x.civnChecked ? '<span class="muted">No CERT-In note</span>' : '<span class="muted">Not checked</span>')) + '</td></tr>').join('') +
     '</tbody></table></div>' + (shown.length > 400 ? '<p class="muted">Showing 400 of ' + fmt(shown.length) + '. Download the CSV for all.</p>' : '') + '</div>';
 }
+function vulnLink(id) { return /^CVE-/.test(id) ? 'https://nvd.nist.gov/vuln/detail/' + encodeURIComponent(id) : /^GHSA-/.test(id) ? 'https://github.com/advisories/' + encodeURIComponent(id) : /^SNYK-/.test(id) ? 'https://security.snyk.io/vuln/' + encodeURIComponent(id) : 'https://osv.dev/vulnerability/' + encodeURIComponent(id); }
 function safeUrl(u) { return /^https:\/\/(www\.)?cert-in\.org\.in\//.test(u || '') ? u : 'https://www.cert-in.org.in/'; }
 function renderCra() { return '<div class="card"><h2>EU Cyber Resilience Act</h2><p class="muted">SBOM duties in Annex I, read with BSI TR-03183-2 (the most detailed published SBOM profile for the CRA). Vulnerability-reporting duties apply from 11 Sep 2026; the remaining obligations from 11 Dec 2027.</p>' + checksTable(craChecks(STATE)) + '</div>'; }
 function renderNist() { return '<div class="card"><h2>NIST</h2><p class="muted">NTIA minimum elements (referenced by NIST for EO 14028), NIST SP 800-218 (SSDF), SP 800-40 r4 (patching), SP 800-131A (hashes) and IR 8547 (post-quantum transition).</p>' + checksTable(nistChecks(STATE)) + '</div>'; }
@@ -710,6 +835,77 @@ function renderMachines(tab) {
     res.map((r) => '<div class="card"><h3>' + esc(r.m.name) + ' <span class="mono muted">' + esc(r.m.ip_address) + '</span></h3>' + checksTable(r.checks) + '</div>').join('');
 }
 
+/* ---------- SARIF views & checks ---------- */
+const sevClass = (sv) => sv === 'critical' || sv === 'high' ? 'fail' : sv === 'medium' ? 'warn' : sv === 'low' ? 'info' : 'na';
+const sevRank = (sv) => (SEV_ORDER[sv] != null ? SEV_ORDER[sv] : -1);
+function sarifOpen(s) { return s.findings.filter((f) => f.kind === 'vuln' && !f.suppressed); }
+function scanAgeDays(s) { const t = Date.parse(s.meta.timestamp || ''); return isNaN(t) ? null : (Date.now() - t) / 864e5; }
+function sarifCraChecks(s) {
+  const out = []; const cves = Array.from(s.cves.values()); const age = scanAgeDays(s);
+  const hasVulnScan = s.findings.some((f) => f.kind === 'vuln') || s.findings.length === 0;
+  const when = age == null ? 'scan time not recorded' : 'scanned ' + Math.round(age) + ' day(s) ago';
+  out.push(['Product tested for known vulnerabilities', 'CRA Annex I, Part II (3)', !hasVulnScan ? 'info' : age != null && age > 90 ? 'warn' : 'pass', hasVulnScan ? s.meta.tools.join(', ') + ' · ' + when : 'This file has only code-scanning results; upload a dependency or container scan']);
+  const exploit = cves.filter((x) => (x.epss || 0) >= 0.5); const crit = cves.filter((x) => x.severity === 'critical');
+  out.push(['No known exploitable vulnerabilities at release', 'CRA Annex I, Part I (2)(a)', !s.online ? 'info' : exploit.length || crit.length ? 'fail' : 'pass', !s.online ? 'Run online look-ups to assess' : exploit.length + ' CVEs with EPSS ≥ 50%, ' + crit.length + ' critical vulnerabilities']);
+  const fixable = cves.filter((x) => x.fixed.length);
+  out.push(['Vulnerabilities addressed by security updates', 'CRA Annex I, Part II (2)', !cves.length ? 'pass' : fixable.length ? 'warn' : 'info', !cves.length ? 'No open vulnerabilities in the scan' : fixable.length ? fixable.length + ' of ' + cves.length + ' vulnerabilities have a fixed version available' : 'No fixed versions published: plan mitigations']);
+  const supp = s.findings.filter((f) => f.kind === 'vuln' && f.suppressed); const noJust = supp.filter((f) => !f.justification).length;
+  out.push(['Accepted risks documented', 'CRA Annex I, Part II (1)', !supp.length ? 'na' : noJust ? 'warn' : 'pass', !supp.length ? 'No suppressed vulnerability findings' : supp.length + ' suppressed, ' + noJust + ' without a justification']);
+  out.push(['Components identified and documented (SBOM)', 'CRA Annex I, Part II (1)', 'info', 'A SARIF scan has no component inventory: upload the SBOM of the same build to check this']);
+  out.push(['Actively exploited vulnerabilities reported within 24 hours', 'CRA Art. 14(1)', 'info', 'Exploitation status is not in SARIF: check CISA KEV and vendor advisories for these ' + cves.length + ' vulnerabilities']);
+  return out;
+}
+function sarifNistChecks(s) {
+  const out = []; const cves = Array.from(s.cves.values()); const open = sarifOpen(s); const age = scanAgeDays(s);
+  out.push(['Vulnerabilities identified by regular scanning', 'NIST SP 800-218 RV.1.1 · SP 800-53 RA-5', age == null ? 'info' : age <= 30 ? 'pass' : age <= 90 ? 'warn' : 'fail', (age == null ? 'Scan time not recorded in the file' : 'Scanned ' + Math.round(age) + ' day(s) ago') + ' by ' + s.meta.tools.join(', ')]);
+  const rated = open.filter((f) => f.v && f.v.severity !== 'unknown').length;
+  out.push(['Each vulnerability has a severity rating', 'NIST SP 800-218 RV.2.1', !open.length ? 'na' : status(pct(rated, open.length)), open.length ? rated + ' of ' + open.length + ' open findings (' + pct(rated, open.length) + '%)' : 'No open vulnerability findings']);
+  const fixable = cves.filter((x) => x.fixed.length);
+  out.push(['Patchable vulnerabilities remediated', 'NIST SP 800-40 r4', fixable.length ? 'fail' : 'pass', cves.length ? fixable.length + ' of ' + cves.length + ' vulnerabilities have an available fix' : 'No open vulnerabilities']);
+  const code = s.findings.filter((f) => f.kind === 'code').length;
+  if (code) out.push(['Code-scanning findings', 'NIST SP 800-218 PW.7 / PW.8', 'info', code + ' code findings are listed under Findings; this tool assesses dependency vulnerabilities only']);
+  return out;
+}
+function renderSarif(tab) {
+  const s = STATE;
+  if (tab === 'cves') return renderCves();
+  if (tab === 'findings') return renderFindings();
+  if (tab === 'cra') return '<div class="card"><h2>EU Cyber Resilience Act</h2><p class="muted">Vulnerability-handling duties in Annex I and Art. 14, judged from this scan. Reporting of actively exploited vulnerabilities applies from 11 Sep 2026; the remaining obligations from 11 Dec 2027.</p>' + checksTable(sarifCraChecks(s)) + '</div>';
+  if (tab === 'nist') return '<div class="card"><h2>NIST</h2><p class="muted">NIST SP 800-218 (SSDF) vulnerability-response practices, SP 800-40 r4 (patching) and SP 800-53 r5 RA-5 (vulnerability scanning).</p>' + checksTable(sarifNistChecks(s)) + '</div>';
+  const open = sarifOpen(s); const cves = Array.from(s.cves.values());
+  const sevCount = (k) => cves.filter((x) => x.severity === k).length;
+  const supp = s.findings.filter((f) => f.suppressed).length; const code = s.findings.filter((f) => f.kind === 'code').length;
+  const pkgs = s.comps.filter((c) => c.vulns.length).map((c) => ({ c, max: c.vulns.reduce((a, v) => sevRank(v.severity) > sevRank(a) ? v.severity : a, 'unknown'), fix: uniq(c.vulns.flatMap((v) => v.fixed)) }))
+    .sort((a, b) => sevRank(b.max) - sevRank(a.max) || b.c.vulns.length - a.c.vulns.length);
+  return '<div class="card"><h2>' + esc(s.fileName) + '</h2><p class="muted">' + esc(s.meta.format) + ' · ' + esc(s.meta.tools.join(', ')) + ' · scanned ' + esc(s.meta.timestamp || 'at an unknown time') + '</p>' +
+    '<div class="grid">' + stat(fmt(open.length), 'Open vulnerability findings') + stat(fmt(cves.length), 'Unique vulnerabilities (' + sevCount('critical') + ' critical, ' + sevCount('high') + ' high)') +
+    stat(fmt(cves.filter((x) => x.civn.length).length), 'With a CERT-In note') + stat(fmt(cves.filter((x) => x.fixed.length).length), 'Have a fixed version') +
+    stat(fmt(supp), 'Suppressed (accepted risk)') + stat(fmt(code), 'Code findings (not assessed)') + '</div>' +
+    (s.notes.length ? '<div class="note warn">' + s.notes.map(esc).join('<br>') + '</div>' : '') +
+    (!s.online ? '<div class="note">Online look-ups are off, so EPSS, CERT-In notes and missing scores or fixes are not filled in. Tick “Look up missing data online” and reload the file.</div>' : '') +
+    (s.fixedInBaseline ? '<div class="note">' + fmt(s.fixedInBaseline) + ' result(s) marked as fixed since the previous scan (baselineState “absent”) were left out.</div>' : '') +
+    '<div class="note">A SARIF file holds scan results, not a component inventory, so the CERT-In 21 SBOM fields can’t be checked from it. Upload the SBOM of the same build for those.</div></div>' +
+    (pkgs.length ? '<div class="card"><h2>Affected packages</h2><div class="tbl"><table><thead><tr><th>Package</th><th>Version</th><th class="num">Vulnerabilities</th><th>Highest severity</th><th>Fixed version</th></tr></thead><tbody>' +
+      pkgs.slice(0, 300).map((p) => '<tr><td>' + esc(p.c.f.name.value) + '</td><td class="mono">' + esc(p.c.f.version.value || '—') + '</td><td class="num">' + p.c.vulns.length + '</td><td>' + pill(sevClass(p.max), p.max.toUpperCase()) + '</td><td class="mono">' + (p.fix.length ? esc(p.fix.slice(0, 3).join(', ')) : '<span class="muted">none listed</span>') + '</td></tr>').join('') + '</tbody></table></div></div>' : '');
+}
+function renderFindings() {
+  const s = STATE; const filt = s.findFilter || 'vuln';
+  const list = s.findings.filter((f) => filt === 'all' || (filt === 'vuln' && f.kind === 'vuln' && !f.suppressed) || (filt === 'code' && f.kind === 'code') || (filt === 'supp' && f.suppressed));
+  const opt = (v, l) => '<option value="' + v + '"' + (filt === v ? ' selected' : '') + '>' + l + '</option>';
+  return '<div class="card"><h2>Findings</h2><p class="muted">Every result in the scan. Package, version and fixed version are read from the scan; values filled in from OSV.dev are marked.</p>' +
+    '<div class="row"><select id="findFilter" aria-label="Filter findings">' + opt('vuln', 'Open vulnerabilities') + opt('supp', 'Suppressed') + opt('code', 'Code findings') + opt('all', 'All results') + '</select><button type="button" data-export="findings">Download CSV</button><span class="muted" style="font-size:13px">' + fmt(list.length) + ' shown</span></div>' +
+    (!list.length ? '<p class="muted">Nothing in this view.</p>' : '<div class="tbl"><table><thead><tr><th>Finding</th><th>Severity</th><th>Package</th><th>Fixed version</th><th>Location</th><th>Detail</th></tr></thead><tbody>' +
+    list.slice(0, 500).map((f) => {
+      const v = f.v; const sv = v ? v.severity : f.sev.severity; const sc = v ? v.score : f.sev.score;
+      return '<tr><td class="mono">' + (f.ids.length ? f.ids.map((id) => '<a href="' + vulnLink(id) + '" target="_blank" rel="noopener">' + esc(id) + '</a>').join('<br>') : v && /^(SNYK|PYSEC|GO|RUSTSEC|OSV)-/.test(v.id) ? '<a href="' + vulnLink(v.id) + '" target="_blank" rel="noopener">' + esc(v.id) + '</a>' : esc(f.ruleId)) + '<div class="src">' + esc(f.tool) + '</div></td>' +
+        '<td>' + pill(sevClass(sv), (sv || 'unknown').toUpperCase()) + (sc != null ? ' <span class="mono">' + sc + '</span>' : '') + '<div class="src">' + esc(v ? v.basis : f.sev.basis) + '</div></td>' +
+        '<td>' + (f.pkg.name ? esc(f.pkg.name) + ' <span class="mono muted">' + esc(f.pkg.version || '') + '</span>' : '<span class="muted">—</span>') + '</td>' +
+        '<td class="mono">' + (v && v.fixed.length ? esc(v.fixed.slice(0, 3).join(', ')) + (v.fixedFrom ? '<div class="src">from ' + esc(v.fixedFrom) + '</div>' : '') : '<span class="muted">—</span>') + '</td>' +
+        '<td class="mono" style="word-break:break-all">' + esc(f.where || '—') + '</td>' +
+        '<td>' + (f.suppressed ? pill('na', 'Suppressed') + '<div class="src">' + esc(f.justification || 'no justification given') + '</div>' : '') + (f.cwe.length ? '<div class="src">' + esc(f.cwe.join(', ')) + '</div>' : '') + '<div class="src">' + esc(((v && v.summary) || f.message.split('\n')[0]).slice(0, 400)) + '</div></td></tr>';
+    }).join('') + '</tbody></table></div>' + (list.length > 500 ? '<p class="muted">Showing 500 of ' + fmt(list.length) + '. Download the CSV for all.</p>' : '')) + '</div>';
+}
+
 /* ---------- export ---------- */
 function csv(rows) { return rows.map((r) => r.map((v) => '"' + String(v == null ? '' : Array.isArray(v) ? v.join('; ') : v).replace(/"/g, '""') + '"').join(',')).join('\r\n'); }
 function download(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
@@ -723,12 +919,28 @@ function exportCves() {
   download('cves-certin-notes.csv', csv(rows));
 }
 
+function exportFindings() {
+  const rows = [['Tool', 'Rule', 'Vulnerability IDs', 'Kind', 'Severity', 'Score', 'Severity basis', 'Package', 'Version', 'Fixed version', 'Fixed version source', 'Location', 'Suppressed', 'Justification', 'CWE', 'Message']]
+    .concat(STATE.findings.map((f) => { const v = f.v; return [f.tool, f.ruleId, f.ids, f.kind === 'vuln' ? 'vulnerability' : 'code', v ? v.severity : f.sev.severity, v ? v.score : f.sev.score, v ? v.basis : f.sev.basis, f.pkg.name, f.pkg.version, v ? v.fixed : '', v && v.fixedFrom ? v.fixedFrom : (v && v.fixed.length ? 'scan' : ''), f.where, f.suppressed ? 'yes' : 'no', f.justification, f.cwe, f.message]; }));
+  download('sarif-findings.csv', csv(rows));
+}
+
 /* ---------- load ---------- */
 async function load(text, fileName) {
   let doc; try { doc = JSON.parse(text); } catch (e) { setStatus('This file is not valid JSON: ' + e.message, 0); return; }
   const kind = detect(doc);
-  if (kind === 'unknown') { setStatus('Not recognised. Upload a CycloneDX or SPDX JSON SBOM, or an IntelliXBOM machine export.', 0); return; }
+  if (kind === 'unknown') { setStatus('Not recognised. Upload a CycloneDX or SPDX JSON SBOM, a SARIF 2.1 scan, or an IntelliXBOM machine export.', 0); return; }
   TAB = 'overview';
+  if (kind === 'sarif') {
+    const parsed = parseSARIF(doc);
+    STATE = { kind, fileName, ...parsed, cves: new Map(), notes: [], online: $('#online').checked };
+    buildCves(STATE);
+    const nv = parsed.findings.filter((f) => f.kind === 'vuln').length;
+    setStatus('Read ' + fmt(parsed.findings.length) + ' results (' + fmt(nv) + ' vulnerability findings) from ' + parsed.meta.tools.join(', ') + '.', STATE.online ? 0 : 1);
+    render();
+    if (STATE.online) { await enrichSarif(STATE); render(); }
+    return;
+  }
   if (kind === 'machines') { STATE = { kind, fileName, machines: doc, comps: [], cves: new Map(), meta: { authors: [], tools: [] }, notes: [] }; setStatus('Read ' + doc.length + ' machines.', 1); render(); return; }
   const parsed = kind === 'cyclonedx' ? parseCycloneDX(doc) : kind === 'spdx2' ? parseSPDX2(doc) : parseSPDX3(doc);
   STATE = { kind, fileName, ...parsed, cves: new Map(), notes: [], online: $('#online').checked };
@@ -744,10 +956,32 @@ const drop = $('#drop');
 drop.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) f.text().then((t) => load(t, f.name)); });
 $('#stopBtn').addEventListener('click', () => { STOP = true; });
 $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { TAB = b.dataset.tab; render(); } });
-$('#panel').addEventListener('click', (e) => { const b = e.target.closest('[data-export]'); if (b) (b.dataset.export === 'certin' ? exportCertIn : exportCves)(); });
+$('#panel').addEventListener('click', (e) => { const b = e.target.closest('[data-export]'); const fx = b && { certin: exportCertIn, cves: exportCves, findings: exportFindings }[b.dataset.export]; if (fx) fx(); });
 $('#panel').addEventListener('input', (e) => { if (e.target.id === 'q') { STATE.filter = e.target.value; const pos = e.target.selectionStart; render(); const q = $('#q'); q.focus(); q.setSelectionRange(pos, pos); } });
-$('#panel').addEventListener('change', (e) => { if (e.target.id === 'cveFilter') { STATE.cveFilter = e.target.value; render(); } });
+$('#panel').addEventListener('change', (e) => { if (e.target.id === 'cveFilter') { STATE.cveFilter = e.target.value; render(); } if (e.target.id === 'findFilter') { STATE.findFilter = e.target.value; render(); } });
 $('#sampleBtn').addEventListener('click', () => load(JSON.stringify(SAMPLE), 'example-sbom.cdx.json (example)'));
+$('#sampleSarifBtn').addEventListener('click', () => load(JSON.stringify(SAMPLE_SARIF), 'example-scan.sarif (example)'));
+
+/* Example SARIF: a dependency scan (Trivy-style results) plus one code-scanning result, for trying the tool. */
+const SAMPLE_SARIF = {
+  version: '2.1.0', $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+  runs: [
+    { tool: { driver: { name: 'Trivy', version: '0.56.2', rules: [
+        { id: 'CVE-2021-44228', name: 'LanguageSpecificPackageVulnerability', shortDescription: { text: 'log4j-core: Remote code execution in Log4j 2.x when logs contain an attacker-controlled string value' }, properties: { 'security-severity': '10.0', tags: ['vulnerability', 'security', 'CRITICAL'] } },
+        { id: 'CVE-2020-8203', name: 'LanguageSpecificPackageVulnerability', shortDescription: { text: 'nodejs-lodash: prototype pollution in zipObjectDeep function' }, properties: { 'security-severity': '7.4', tags: ['vulnerability', 'security', 'HIGH'] } },
+        { id: 'CVE-2024-29041', name: 'LanguageSpecificPackageVulnerability', shortDescription: { text: 'express: cause malformed URLs to be evaluated' }, properties: { 'security-severity': '6.1', tags: ['vulnerability', 'security', 'MEDIUM'] } }
+      ] } },
+      invocations: [{ executionSuccessful: true, endTimeUtc: '2026-10-28T09:30:00Z' }],
+      results: [
+        { ruleId: 'CVE-2021-44228', ruleIndex: 0, level: 'error', message: { text: 'Package: org.apache.logging.log4j:log4j-core\nInstalled Version: 2.14.1\nVulnerability CVE-2021-44228\nSeverity: CRITICAL\nFixed Version: 2.15.0' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'app/pom.xml' }, region: { startLine: 1 } } }] },
+        { ruleId: 'CVE-2020-8203', ruleIndex: 1, level: 'error', message: { text: 'Package: lodash\nInstalled Version: 4.17.15\nVulnerability CVE-2020-8203\nSeverity: HIGH\nFixed Version: 4.17.19' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/package-lock.json' }, region: { startLine: 1 } } }] },
+        { ruleId: 'CVE-2024-29041', ruleIndex: 2, level: 'warning', message: { text: 'Package: express\nInstalled Version: 4.17.1\nVulnerability CVE-2024-29041\nSeverity: MEDIUM\nFixed Version: 4.19.2, 5.0.0-beta.3' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/package-lock.json' }, region: { startLine: 1 } } }],
+          suppressions: [{ kind: 'external', status: 'accepted', justification: 'Redirect helper not used by this service' }] }
+      ] },
+    { tool: { driver: { name: 'CodeQL', semanticVersion: '2.19.0', rules: [{ id: 'js/sql-injection', shortDescription: { text: 'Database query built from user-controlled sources' }, properties: { 'security-severity': '8.8', tags: ['security', 'external/cwe/cwe-089'] } }] } },
+      results: [{ ruleId: 'js/sql-injection', ruleIndex: 0, level: 'error', message: { text: 'This query depends on a user-provided value.' }, locations: [{ physicalLocation: { artifactLocation: { uri: 'web/src/routes/search.js' }, region: { startLine: 42 } } }] }] }
+  ]
+};
 
 /* Example SBOM: public open-source packages with known CVEs, for trying the tool. */
 const SAMPLE = {
