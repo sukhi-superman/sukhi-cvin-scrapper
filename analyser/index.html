@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BOM Compliance Checker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; a sticky tab bar switches between the five checks. */
+:root{
+  --bg:#F3F5F4; --surface:#FFFFFF; --ink:#13201B; --muted:#55645E; --line:#DCE3E0; --soft:#ECF0EE;
+  --accent:#0F6B57; --accent-ink:#FFFFFF;
+  --pass:#1E7A46; --pass-bg:#E2F2E8; --warn:#9A5B05; --warn-bg:#FCEFD9; --fail:#B42318; --fail-bg:#FBE6E3; --info:#2F5E8C; --info-bg:#E4EDF6; --na:#6B7772; --na-bg:#EDF0EF;
+  --sans:'Public Sans',system-ui,-apple-system,'Segoe UI',sans-serif; --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0F1513; --surface:#17201D; --ink:#E6ECE9; --muted:#9AA8A2; --line:#2A3632; --soft:#1E2925;
+  --accent:#4CC2A2; --accent-ink:#06231B;
+  --pass:#6BD49A; --pass-bg:#173326; --warn:#F2B45C; --warn-bg:#3A2A11; --fail:#FF8B7E; --fail-bg:#3C1915; --info:#8DB8E6; --info-bg:#172A3D; --na:#A2AEA9; --na-bg:#222C29; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans)}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 64px;display:flex;flex-direction:column;gap:22px}
+h1{font-size:28px;line-height:1.2;margin:0;letter-spacing:-.01em;text-wrap:balance}
+h2{font-size:19px;margin:0}
+h3{font-size:15px;margin:0}
+p{margin:0}
+.muted{color:var(--muted)}
+.mono{font-family:var(--mono);font-size:12.5px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:2px;background:var(--surface)}
+.stat b{font-size:24px;font-variant-numeric:tabular-nums;line-height:1.15}
+.stat span{font-size:12.5px;color:var(--muted)}
+button,.btn{font:600 14px var(--sans);min-height:40px;padding:0 16px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button:disabled{opacity:.55;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:28px 20px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;background:var(--surface);cursor:pointer}
+.drop.over{border-color:var(--accent);background:var(--soft)}
+.tabs{position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 0;display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.tabs button{border:0;background:transparent;min-height:38px;color:var(--muted)}
+.tabs button[aria-selected="true"]{background:var(--surface);color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent)}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-pass{color:var(--pass);background:var(--pass-bg)} .p-warn{color:var(--warn);background:var(--warn-bg)} .p-fail{color:var(--fail);background:var(--fail-bg)} .p-info{color:var(--info);background:var(--info-bg)} .p-na{color:var(--na);background:var(--na-bg)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:9px 10px;background:var(--soft);white-space:nowrap}
+td{padding:9px 10px;border-top:1px solid var(--line);vertical-align:top}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:8px;border-radius:4px;background:var(--soft);display:flex;overflow:hidden;min-width:120px}
+.bar i{display:block;height:8px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.note{border-left:3px solid var(--info);background:var(--info-bg);padding:10px 12px;border-radius:6px;font-size:13.5px}
+.note.warn{border-color:var(--warn);background:var(--warn-bg)}
+details{border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+summary{cursor:pointer;padding:10px 12px;font-weight:600}
+details>div{padding:0 12px 12px}
+.src{font-size:11.5px;color:var(--muted)}
+.progress{height:6px;background:var(--soft);border-radius:3px;overflow:hidden}
+.progress i{display:block;height:6px;background:var(--accent);width:0;transition:width .2s}
+input[type=search],select{font:14px var(--sans);min-height:38px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+a{color:var(--accent)}
+.civn{border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;background:var(--soft)}
+.hidden{display:none!important}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:6px">
+    <h1>BOM Compliance Checker</h1>
+    <p class="muted">Upload a CycloneDX or SPDX SBOM (JSON), or an IntelliXBOM machine export. The file is read in your browser. It is checked against CERT-In's 21 SBOM fields, CVEs with CERT-In vulnerability notes, the EU Cyber Resilience Act and NIST guidance.</p>
+  </header>
+
+  <section class="card" aria-label="Upload">
+    <label class="drop" id="drop" for="file">
+      <strong>Drop a JSON file here, or choose one</strong>
+      <span class="muted" style="font-size:13px">CycloneDX 1.4–1.6 · SPDX 2.x / 3.0 JSON · IntelliXBOM machine export</span>
+      <input id="file" type="file" accept=".json,application/json" class="hidden">
+    </label>
+    <div class="row">
+      <button type="button" id="sampleBtn">Load an example SBOM</button>
+      <label class="row" style="gap:8px;font-size:14px"><input type="checkbox" id="online" checked> Look up missing data online</label>
+      <span class="muted" style="font-size:13px">Sends package IDs and CVE IDs (never the file) to OSV, deps.dev, ecosyste.ms, endoflife.date, FIRST EPSS and the CERT-In notes index.</span>
+    </div>
+    <div id="status" class="hidden" style="display:flex;flex-direction:column;gap:6px">
+      <div class="row" style="justify-content:space-between"><span id="statusText" class="muted" style="font-size:13px"></span><button type="button" id="stopBtn" class="hidden">Stop lookups</button></div>
+      <div class="progress"><i id="prog"></i></div>
+    </div>
+  </section>
+
+  <div id="results" class="hidden" style="display:flex;flex-direction:column;gap:18px">
+    <nav class="tabs" role="tablist" aria-label="Checks" id="tabs"></nav>
+    <section id="panel" style="display:flex;flex-direction:column;gap:16px"></section>
+  </div>
+
+  <footer class="muted" style="font-size:12px;display:flex;flex-direction:column;gap:4px">
+    <span>Frameworks: CERT-In Technical Guidelines on SBOM, QBOM &amp; CBOM, AIBOM &amp; HBOM v2.0 (21 SBOM fields) · EU Cyber Resilience Act (Regulation (EU) 2024/2847) Annex I, read with BSI TR-03183-2 · NTIA minimum elements as referenced by NIST for EO 14028, NIST SP 800-218, SP 800-40r4, IR 8547, SP 800-53r5.</span>
+    <span>CERT-In notes come from the unofficial Sukhi CVIN index (sukhi-superman.github.io/sukhi-cvin-scrapper/v2/), which mirrors cert-in.org.in. This tool gives an indication, not a legal compliance opinion.</span>
+  </footer>
+</div>
+
+<script>
+'use strict';
+/* ---------- helpers ---------- */
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct = (n, d) => d ? Math.round(n / d * 100) : 0;
+const fmt = (n) => Number(n).toLocaleString('en-US');
+const uniq = (a) => Array.from(new Set(a.filter(Boolean)));
+const today = new Date();
+const SRC = {
+  osv: 'OSV.dev (api.osv.dev)', deps: 'deps.dev (api.deps.dev)', eco: 'ecosyste.ms (packages.ecosyste.ms)',
+  eol: 'endoflife.date', epss: 'FIRST EPSS (api.first.org)', nvd: 'NVD (services.nvd.nist.gov)',
+  civn: 'Sukhi CVIN index (mirror of cert-in.org.in)', rule: 'Rule in this tool'
+};
+let STOP = false;
+async function pool(items, n, fn) {
+  let i = 0; const out = new Array(items.length);
+  async function run() { while (i < items.length && !STOP) { const k = i++; try { out[k] = await fn(items[k], k); } catch (e) { out[k] = null; } } }
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, run));
+  return out;
+}
+async function getJSON(url, opts = {}, ms = 20000) {
+  const c = new AbortController(); const t = setTimeout(() => c.abort(), ms);
+  try { const r = await fetch(url, { ...opts, signal: c.signal }); if (!r.ok) return null; return await r.json(); }
+  catch (e) { return null; } finally { clearTimeout(t); }
+}
+function setStatus(text, frac) {
+  $('#status').classList.remove('hidden');
+  $('#statusText').textContent = text;
+  if (frac != null) $('#prog').style.width = Math.round(frac * 100) + '%';
+}
+
+/* ---------- CVSS v3.x base score from a vector ---------- */
+function cvss3(vec) {
+  if (!vec || !/^CVSS:3/.test(vec)) return null;
+  const m = {}; vec.split('/').slice(1).forEach((p) => { const [k, v] = p.split(':'); m[k] = v; });
+  const AV = {N:.85,A:.62,L:.55,P:.2}[m.AV], AC = {L:.77,H:.44}[m.AC], UI = {N:.85,R:.62}[m.UI];
+  const S = m.S; const PR = S === 'C' ? {N:.85,L:.68,H:.5}[m.PR] : {N:.85,L:.62,H:.27}[m.PR];
+  const CIA = {H:.56,L:.22,N:0}; const C = CIA[m.C], I = CIA[m.I], A = CIA[m.A];
+  if ([AV,AC,UI,PR,C,I,A].some((x) => x == null)) return null;
+  const iss = 1 - (1 - C) * (1 - I) * (1 - A);
+  const imp = S === 'U' ? 6.42 * iss : 7.52 * (iss - .029) - 3.25 * Math.pow(iss - .02, 15);
+  const ex = 8.22 * AV * AC * PR * UI;
+  if (imp <= 0) return 0;
+  const up = (x) => { const i = Math.round(x * 100000); return i % 10000 === 0 ? i / 100000 : (Math.floor(i / 10000) + 1) / 10; };
+  return S === 'U' ? up(Math.min(imp + ex, 10)) : up(Math.min(1.08 * (imp + ex), 10));
+}
+const sevFromScore = (s) => s == null ? null : s >= 9 ? 'critical' : s >= 7 ? 'high' : s >= 4 ? 'medium' : s > 0 ? 'low' : 'none';
+const SEV_ORDER = { critical: 4, high: 3, medium: 2, low: 1, none: 0, info: 0, unknown: -1 };
+
+/* ---------- licences ---------- */
+const STRONG = /^(A?GPL|SSPL|OSL|EUPL|CPAL|RPL|Sleepycat)/i, WEAK = /^(LGPL|MPL|EPL|CDDL|CPL|MS-RL|APSL)/i, PD = /^(CC0|Unlicense|0BSD|WTFPL)/i, PERM = /^(MIT|Apache|BSD|ISC|Zlib|PSF|Python|Artistic|BSL-1\.0|X11|NCSA|PostgreSQL|OpenSSL|curl|Unicode)/i;
+function licCategory(ids) {
+  const list = (ids || []).join(' ').split(/\s+(?:AND|OR|WITH)\s+|[()\s,]+/).filter(Boolean);
+  if (!list.length) return null;
+  if (list.some((x) => STRONG.test(x))) return 'Strong copyleft';
+  if (list.some((x) => WEAK.test(x))) return 'Weak copyleft';
+  if (list.some((x) => /^LicenseRef|proprietary|commercial/i.test(x))) return 'Proprietary / custom';
+  if (list.every((x) => PD.test(x))) return 'Public domain';
+  if (list.some((x) => PERM.test(x) || PD.test(x))) return 'Permissive';
+  return 'Unclassified';
+}
+const RESTRICT = { 'Strong copyleft': 'Copyleft: distributing it may require releasing your source under the same licence', 'Weak copyleft': 'Changes to this library must be published; linking is allowed', 'Proprietary / custom': 'Vendor licence terms apply; review before use', 'Permissive': 'No significant restriction; keep the copyright notice', 'Public domain': 'No restriction', 'Unclassified': 'Licence not recognised; review by hand' };
+
+/* ---------- format detection & parsing ---------- */
+function detect(doc) {
+  if (Array.isArray(doc) && doc.length && doc.every((m) => m && typeof m === 'object' && ('ip_address' in m || 'enabled_bom_types' in m || 'os_type' in m))) return 'machines';
+  if (doc && doc.bomFormat === 'CycloneDX') return 'cyclonedx';
+  if (doc && (doc.spdxVersion || doc.SPDXID)) return 'spdx2';
+  if (doc && (doc['@context'] && JSON.stringify(doc['@context']).includes('spdx') || Array.isArray(doc['@graph']))) return 'spdx3';
+  return 'unknown';
+}
+const F = (value, src, from) => ({ value: value === '' ? null : value, src: value == null || value === '' || (Array.isArray(value) && !value.length) ? 'missing' : src, from: from || null });
+function prop(props, re) { const p = (props || []).find((x) => re.test(x.name || '')); return p ? p.value : null; }
+
+function parseCycloneDX(doc) {
+  const md = doc.metadata || {};
+  const tools = Array.isArray(md.tools) ? md.tools : (md.tools && md.tools.components) || [];
+  const authors = (md.authors || []).map((a) => [a.name, a.email].filter(Boolean).join(' ')).filter(Boolean);
+  const meta = {
+    format: 'CycloneDX ' + (doc.specVersion || '?'), specVersion: doc.specVersion || '', serial: doc.serialNumber || '',
+    timestamp: md.timestamp || null,
+    authors, tools: tools.map((t) => [t.vendor || (t.manufacturer && t.manufacturer.name) || t.group, t.name, t.version].filter(Boolean).join(' ')),
+    creatorContact: authors.find((a) => /@|https?:/.test(a)) || ((md.manufacturer || md.supplier || md.manufacture) && ((md.manufacturer || md.supplier || md.manufacture).url || []).concat(((md.manufacturer || md.supplier || md.manufacture).contact || []).map((c) => c.email)).filter(Boolean)[0]) || null,
+    root: md.component ? (md.component['bom-ref'] || md.component.name) : null,
+    signed: !!doc.signature, hasCompositions: Array.isArray(doc.compositions) && doc.compositions.length > 0
+  };
+  const flat = [];
+  (function walk(list) { (list || []).forEach((c) => { flat.push(c); if (c.components) walk(c.components); }); })(doc.components);
+  const deps = new Map(); (doc.dependencies || []).forEach((d) => deps.set(d.ref, d.dependsOn || []));
+  const nameByRef = new Map(flat.map((c) => [c['bom-ref'], c.name + (c.version ? '@' + c.version : '')]));
+  const vulnsByRef = new Map();
+  (doc.vulnerabilities || []).forEach((v) => {
+    const ratings = v.ratings || []; const best = ratings.slice().sort((a, b) => (b.score || 0) - (a.score || 0))[0] || {};
+    const rec = { id: v.id, aliases: (v.references || []).map((r) => r.id).filter(Boolean), score: best.score != null ? best.score : cvss3(best.vector), severity: (best.severity || sevFromScore(best.score) || 'unknown').toLowerCase(), state: v.analysis && v.analysis.state, response: v.analysis && v.analysis.response, recommendation: v.recommendation || '', fixed: v.recommendation ? [v.recommendation] : [], summary: v.description || '', src: 'native' };
+    (v.affects || []).forEach((a) => { if (!vulnsByRef.has(a.ref)) vulnsByRef.set(a.ref, []); vulnsByRef.get(a.ref).push(rec); });
+  });
+  const comps = flat.map((c) => {
+    const p = c.properties || [];
+    const lic = (c.licenses || []).map((l) => l.expression || (l.license && (l.license.id || l.license.name))).filter(Boolean);
+    const supplier = (c.supplier && c.supplier.name) || (c.manufacturer && c.manufacturer.name) || c.publisher || c.author || ((c.authors || [])[0] && c.authors[0].name) || null;
+    const hashes = (c.hashes || []).map((h) => ({ alg: h.alg, content: h.content }));
+    const ref = c['bom-ref'];
+    const dlist = (deps.get(ref) || []).map((r) => nameByRef.get(r) || r);
+    const vulns = (vulnsByRef.get(ref) || []).slice();
+    const eid = c.purl || c.cpe || (c.swid && c.swid.tagId) || (c.omniborId && c.omniborId[0]) || null;
+    return {
+      key: ref || c.name + '@' + c.version, type: c.type || '', purl: c.purl || null, cpe: c.cpe || null, filename: prop(p, /file.?name/i),
+      f: {
+        name: F(c.name, 'native'), version: F(c.version, 'native'), description: F(c.description, 'native'),
+        supplier: F(supplier, 'native'), license: F(lic.length ? lic : null, 'native'),
+        origin: F(prop(p, /origin/i) || (c.pedigree ? 'modified (pedigree recorded)' : null), 'native'),
+        dependencies: F(dlist.length ? dlist : (deps.has(ref) ? ['none (declared leaf)'] : null), 'native'),
+        vulnerabilities: F(vulns.length ? vulns.map((v) => v.id) : (doc.vulnerabilities ? ['None listed'] : null), 'native'),
+        patch: F(prop(p, /patch/i) || (vulns.length ? summarisePatch(vulns) : null), 'native'),
+        release: F(prop(p, /release.?date/i) || c.releaseDate || null, 'native'),
+        eol: F(prop(p, /(eol|end.?of.?life)/i), 'native'),
+        criticality: F(prop(p, /critical/i), 'native'),
+        usage: F(prop(p, /(usage|restriction)/i), 'native'),
+        hashes: F(hashes.length ? hashes.map((h) => h.alg).join(', ') : null, 'native'),
+        comments: F(prop(p, /(comment|note)/i) || (c.evidence && c.evidence.occurrences ? 'Evidence: ' + c.evidence.occurrences.length + ' occurrence(s)' : null), 'native'),
+        executable: F(prop(p, /executable/i), 'native'), archive: F(prop(p, /archive/i), 'native'), structured: F(prop(p, /structured/i), 'native'),
+        uid: F(eid || ref || null, 'native')
+      },
+      hashAlgs: hashes.map((h) => (h.alg || '').toUpperCase()), vulns, isRootDep: meta.root && (deps.get(meta.root) || []).includes(ref),
+      crypto: c.cryptoProperties || null
+    };
+  });
+  return { meta, comps, docDepsCount: deps.size };
+}
+function summarisePatch(vulns) {
+  const st = vulns.map((v) => v.state || (v.recommendation ? 'fix recommended' : '')).filter(Boolean);
+  return st.length ? uniq(st).join(', ') : null;
+}
+function parseSPDX2(doc) {
+  const ci = doc.creationInfo || {};
+  const creators = ci.creators || [];
+  const meta = { format: 'SPDX ' + (doc.spdxVersion || '').replace('SPDX-', ''), specVersion: (doc.spdxVersion || '').replace('SPDX-', ''), serial: doc.documentNamespace || '', timestamp: ci.created || null,
+    authors: creators.filter((c) => !/^Tool:/.test(c)).map((c) => c.replace(/^(Person|Organization):\s*/, '')), tools: creators.filter((c) => /^Tool:/.test(c)).map((c) => c.replace(/^Tool:\s*/, '')),
+    creatorContact: creators.find((c) => /\(.+@.+\)|https?:/.test(c)) || null, root: (doc.documentDescribes || [])[0] || null, signed: false, hasCompositions: false };
+  const rel = doc.relationships || [];
+  const byId = new Map((doc.packages || []).map((p) => [p.SPDXID, p]));
+  const deps = new Map();
+  rel.forEach((r) => { if (/DEPENDS_ON|CONTAINS|DYNAMIC_LINK|STATIC_LINK/.test(r.relationshipType)) { if (!deps.has(r.spdxElementId)) deps.set(r.spdxElementId, []); deps.get(r.spdxElementId).push(r.relatedSpdxElement); } });
+  const na = (v) => (!v || /^NOASSERTION|^NONE$/.test(v)) ? null : v;
+  const comps = (doc.packages || []).map((p) => {
+    const refs = p.externalRefs || [];
+    const purl = (refs.find((r) => /purl/i.test(r.referenceType)) || {}).referenceLocator || null;
+    const cpe = (refs.find((r) => /cpe/i.test(r.referenceType)) || {}).referenceLocator || null;
+    const lic = na(p.licenseConcluded) || na(p.licenseDeclared);
+    const purpose = (p.primaryPackagePurpose || '').toUpperCase();
+    const dl = (deps.get(p.SPDXID) || []).map((id) => { const q = byId.get(id); return q ? q.name + (q.versionInfo ? '@' + q.versionInfo : '') : id; });
+    return {
+      key: p.SPDXID, type: purpose.toLowerCase(), purl, cpe, filename: p.packageFileName || null,
+      f: {
+        name: F(p.name, 'native'), version: F(p.versionInfo, 'native'), description: F(p.description || p.summary, 'native'),
+        supplier: F(na(p.supplier) ? p.supplier.replace(/^(Organization|Person):\s*/, '') : (na(p.originator) ? p.originator.replace(/^(Organization|Person):\s*/, '') : null), 'native'),
+        license: F(lic ? [lic] : null, 'native'), origin: F(na(p.originator) ? 'originator: ' + p.originator.replace(/^(Organization|Person):\s*/, '') : null, 'native'),
+        dependencies: F(dl.length ? dl : null, 'native'), vulnerabilities: F(null, 'native'), patch: F(null, 'native'),
+        release: F(p.releaseDate || null, 'native'), eol: F(p.validUntilDate || null, 'native'), criticality: F(null, 'native'), usage: F(null, 'native'),
+        hashes: F((p.checksums || []).map((c) => c.algorithm).join(', ') || null, 'native'), comments: F(p.comment || null, 'native'),
+        executable: F(purpose === 'APPLICATION' || purpose === 'INSTALL' ? 'executable' : null, 'native'), archive: F(purpose === 'ARCHIVE' ? 'archive' : null, 'native'), structured: F(null, 'native'),
+        uid: F(purl || cpe || p.SPDXID, 'native')
+      },
+      hashAlgs: (p.checksums || []).map((c) => (c.algorithm || '').toUpperCase()), vulns: [], isRootDep: meta.root && (deps.get(meta.root) || []).includes(p.SPDXID), crypto: null
+    };
+  });
+  return { meta, comps, docDepsCount: deps.size };
+}
+function parseSPDX3(doc) {
+  const g = doc['@graph'] || [];
+  const ci = g.find((x) => /CreationInfo/.test(x.type || x['@type'] || '')) || {};
+  const pkgs = g.filter((x) => /software_Package|software\/Package/.test(x.type || x['@type'] || ''));
+  const meta = { format: 'SPDX 3.x', specVersion: ci.specVersion || '3', serial: '', timestamp: ci.created || null, authors: [].concat(ci.createdBy || []), tools: [].concat(ci.createdUsing || []), creatorContact: null, root: null, signed: false, hasCompositions: false };
+  const rels = g.filter((x) => /Relationship/.test(x.type || x['@type'] || ''));
+  const comps = pkgs.map((p) => {
+    const id = p.spdxId || p['@id'];
+    const dl = rels.filter((r) => r.from === id && /dependsOn|contains/i.test(r.relationshipType || '')).flatMap((r) => [].concat(r.to));
+    const hashes = [].concat(p.verifiedUsing || []).map((h) => h.algorithm).filter(Boolean);
+    return { key: id, type: (p.software_primaryPurpose || '').toLowerCase(), purl: p.software_packageUrl || null, cpe: null, filename: null,
+      f: { name: F(p.name, 'native'), version: F(p.software_packageVersion, 'native'), description: F(p.description || p.summary, 'native'), supplier: F(p.suppliedBy || p.originatedBy, 'native'),
+        license: F(null, 'native'), origin: F(null, 'native'), dependencies: F(dl.length ? dl : null, 'native'), vulnerabilities: F(null, 'native'), patch: F(null, 'native'),
+        release: F(p.releaseTime || null, 'native'), eol: F(p.validUntilTime || null, 'native'), criticality: F(null, 'native'), usage: F(null, 'native'),
+        hashes: F(hashes.join(', ') || null, 'native'), comments: F(p.comment || null, 'native'), executable: F(null, 'native'), archive: F(null, 'native'), structured: F(null, 'native'),
+        uid: F(p.software_packageUrl || id, 'native') },
+      hashAlgs: hashes.map((h) => h.toUpperCase()), vulns: [], isRootDep: false, crypto: null };
+  });
+  return { meta, comps, docDepsCount: rels.length };
+}
+
+/* ---------- CERT-In fields ---------- */
+const CERTIN = [
+  ['name', 'Component Name', 'Name of the software component'],
+  ['version', 'Component Version', 'Specific version or build identifier'],
+  ['description', 'Component Description', 'Purpose or functional summary'],
+  ['supplier', 'Component Supplier', 'Vendor, developer or OSS maintainer'],
+  ['license', 'Component License', 'Licence under which it is distributed'],
+  ['origin', 'Component Origin', 'Open-source, proprietary, internal or third-party'],
+  ['dependencies', 'Component Dependencies', 'Libraries or packages it relies on'],
+  ['vulnerabilities', 'Vulnerabilities', 'Known CVEs mapped to the component'],
+  ['patch', 'Patch Status', 'Whether patches are available or applied'],
+  ['release', 'Release Date', 'Release date of this version'],
+  ['eol', 'End-of-Life (EOL) Date', 'Support end or EOL timeline'],
+  ['criticality', 'Criticality', 'Technical or business criticality'],
+  ['usage', 'Usage Restrictions', 'Licence or vendor-imposed limits'],
+  ['hashes', 'Checksums or Hashes', 'Integrity values such as SHA-256 or SHA-512'],
+  ['comments', 'Comments or Notes', 'Additional context'],
+  ['author', 'Author of SBOM Data', 'Person or system that generated the SBOM'],
+  ['timestamp', 'Timestamp', 'When the SBOM was generated'],
+  ['executable', 'Executable Property', 'Whether the component is executable'],
+  ['archive', 'Archive Property', 'Whether it is packaged as an archive'],
+  ['structured', 'Structured Property', 'Whether its contents are structured'],
+  ['uid', 'Unique Identifier', 'PURL, CPE, UUID or other unique ID']
+];
+
+/* ---------- derivation rules that need no network ---------- */
+function deriveLocal(c) {
+  const f = c.f;
+  if (f.origin.src === 'missing') {
+    const cat = licCategory(f.license.value);
+    if (cat && cat !== 'Proprietary / custom' && cat !== 'Unclassified') f.origin = F('open-source (licence ' + (f.license.value || []).join(', ') + ')', 'derived', SRC.rule + ': OSI/SPDX licence ⇒ open-source');
+    else if (cat === 'Proprietary / custom') f.origin = F('proprietary / third-party', 'derived', SRC.rule + ': non-SPDX licence');
+    else if (c.purl && /^pkg:(npm|pypi|maven|golang|cargo|nuget|gem|composer|deb|apk|rpm|github)\//.test(c.purl)) f.origin = F('open-source (public registry: ' + c.purl.split(/[:/]/)[1] + ')', 'derived', SRC.rule + ': package published on a public registry');
+  }
+  if (f.usage.src === 'missing') { const cat = licCategory(f.license.value); if (cat) f.usage = F(RESTRICT[cat], 'derived', SRC.rule + ': licence category (' + cat + ')' + (f.license.src === 'derived' ? ', licence from ' + f.license.from : '')); }
+  const fn = (c.filename || f.name.value || '').toLowerCase();
+  if (f.archive.src === 'missing') {
+    if (/\.(zip|tar|tgz|gz|bz2|xz|7z|rar|jar|war|ear|whl|apk|deb|rpm|nupkg|gem|aar)$/.test(fn) || /^pkg:(maven|pypi|nuget|gem|deb|rpm|apk|npm|cargo)\//.test(c.purl || '')) f.archive = F('archive', 'derived', SRC.rule + ': distributed as a packaged archive (' + ((c.purl || '').split(/[:/]/)[1] || 'file extension') + ')');
+    else if (c.type === 'file' || c.type === 'library' || c.type === 'application') f.archive = F('no archive', 'derived', SRC.rule + ': component type "' + c.type + '"');
+  }
+  if (f.executable.src === 'missing') {
+    if (/\.(exe|dll|so|dylib|elf|bin|msi)$/.test(fn) || c.type === 'application' || c.type === 'operating-system' || c.type === 'firmware') f.executable = F('executable', 'derived', SRC.rule + ': component type "' + c.type + '"');
+    else if (c.type === 'library' || c.type === 'framework') f.executable = F('non-executable', 'derived', SRC.rule + ': component type "' + c.type + '"');
+    else if (c.type === 'data' || c.type === 'cryptographic-asset' || c.type === 'file') f.executable = F('non-executable', 'derived', SRC.rule + ': component type "' + c.type + '"');
+  }
+  if (f.structured.src === 'missing' && (c.purl || c.type)) f.structured = F('structured', 'derived', SRC.rule + ': package with a manifest (' + (c.purl ? 'PURL' : 'type') + ')');
+  refreshVulnFields(c);
+}
+function refreshVulnFields(c) {
+  const f = c.f;
+  if (c.vulns.length) {
+    const ids = uniq(c.vulns.map((v) => v.cve || v.id));
+    const anyNative = c.vulns.some((v) => v.src === 'native'), anyDerived = c.vulns.some((v) => v.src !== 'native');
+    f.vulnerabilities = F(ids, anyNative ? 'native' : 'derived', anyNative ? (anyDerived ? null : null) : SRC.osv);
+    if (anyNative && anyDerived) f.vulnerabilities.extra = 'Some added from ' + SRC.osv;
+    if (f.patch.src !== 'native') {
+      const fixes = uniq(c.vulns.flatMap((v) => v.fixed || []));
+      const noFix = c.vulns.filter((v) => !(v.fixed || []).length).length;
+      const txt = (fixes.length ? 'Fix available: upgrade to ' + fixes.slice(0, 3).join(' / ') + (fixes.length > 3 ? '…' : '') : 'No fixed version published') + (noFix && fixes.length ? ' (' + noFix + ' CVE(s) without a fix)' : '');
+      f.patch = F(txt, 'derived', SRC.osv + ' fixed-version ranges');
+    }
+    if (f.criticality.src !== 'native') {
+      const top = c.vulns.map((v) => v.score || 0).reduce((a, b) => Math.max(a, b), 0);
+      const sev = c.vulns.map((v) => v.severity).sort((a, b) => (SEV_ORDER[b] || -1) - (SEV_ORDER[a] || -1))[0];
+      f.criticality = F((sevFromScore(top) || sev || 'unknown').toUpperCase() + (top ? ' (max CVSS ' + top + ')' : ''), 'derived', SRC.rule + ': highest CVSS of its CVEs');
+    }
+  }
+}
+
+/* ---------- online enrichment ---------- */
+const DEPS_SYS = { npm: 'npm', pypi: 'pypi', maven: 'maven', golang: 'go', cargo: 'cargo', nuget: 'nuget' };
+function parsePurl(p) {
+  const m = /^pkg:([^/]+)\/(.+?)(?:@([^?#]+))?(?:[?#].*)?$/.exec(p || ''); if (!m) return null;
+  const parts = m[2].split('/').map(decodeURIComponent); const name = parts.pop(); const ns = parts.join('/');
+  return { type: m[1].toLowerCase(), ns, name, version: m[3] ? decodeURIComponent(m[3]) : null };
+}
+async function enrich(state) {
+  STOP = false; $('#stopBtn').classList.remove('hidden');
+  const comps = state.comps.filter((c) => c.purl);
+  const LIMIT = 400; const work = comps.slice(0, LIMIT);
+  if (comps.length > LIMIT) state.notes.push('Online look-ups ran for the first ' + LIMIT + ' of ' + comps.length + ' components with a PURL.');
+  const steps = 6; let step = 0; const tick = (t, f) => setStatus(t, (step + (f || 0)) / steps);
+
+  // 1. OSV vulnerabilities
+  tick('Checking ' + work.length + ' components against OSV.dev…');
+  const vulnIdsByComp = new Map();
+  for (let i = 0; i < work.length && !STOP; i += 400) {
+    const chunk = work.slice(i, i + 400);
+    const r = await getJSON('https://api.osv.dev/v1/querybatch', { method: 'POST', body: JSON.stringify({ queries: chunk.map((c) => ({ package: { purl: c.purl.replace(/#.*$/, '') } })) }) }, 40000);
+    if (r && r.results) r.results.forEach((res, k) => vulnIdsByComp.set(chunk[k], (res.vulns || []).map((v) => v.id)));
+  }
+  const allIds = uniq([].concat(...vulnIdsByComp.values())).slice(0, 600);
+  const vulnDetails = new Map();
+  await pool(allIds, 8, async (id, k) => { const v = await getJSON('https://api.osv.dev/v1/vulns/' + encodeURIComponent(id)); if (v) vulnDetails.set(id, v); if (k % 10 === 0) tick('Reading ' + allIds.length + ' OSV advisories…', k / allIds.length); });
+  for (const [c, ids] of vulnIdsByComp) {
+    const pp = parsePurl(c.purl);
+    ids.forEach((id) => {
+      const v = vulnDetails.get(id); if (!v) return;
+      const cve = (v.aliases || []).concat([v.id]).find((a) => /^CVE-/.test(a)) || null;
+      if (c.vulns.some((x) => x.id === id || (cve && (x.id === cve || x.cve === cve)))) return;
+      const vec = (v.severity || []).find((s) => /CVSS_V3/.test(s.type)); const score = vec ? cvss3(vec.score) : null;
+      const fixed = uniq((v.affected || []).filter((a) => !pp || !a.package || (a.package.name || '').toLowerCase().endsWith(pp.name.toLowerCase())).flatMap((a) => (a.ranges || []).flatMap((r) => (r.events || []).map((e) => e.fixed))));
+      c.vulns.push({ id, cve, aliases: v.aliases || [], score, severity: (sevFromScore(score) || (v.database_specific && v.database_specific.severity) || 'unknown').toLowerCase(), summary: v.summary || '', fixed, src: 'derived' });
+    });
+  }
+  for (const [c, ids] of vulnIdsByComp) {
+    if (!c.vulns.length && c.f.vulnerabilities.src === 'missing') {
+      c.f.vulnerabilities = F(['None known'], 'derived', SRC.osv + ' (no advisory for this version)');
+      if (c.f.patch.src === 'missing') c.f.patch = F('No patch needed (no known CVEs)', 'derived', SRC.osv);
+      if (c.f.criticality.src === 'missing') c.f.criticality = F('LOW (no known CVEs)', 'derived', SRC.rule + ': no CVEs on OSV.dev');
+    }
+  }
+  step++;
+
+  // 2. deps.dev: licence + release date
+  const depsTargets = work.filter((c) => { const p = parsePurl(c.purl); return p && DEPS_SYS[p.type] && p.version; });
+  await pool(depsTargets, 6, async (c, k) => {
+    const p = parsePurl(c.purl); const name = p.type === 'maven' ? p.ns + ':' + p.name : (p.ns ? p.ns + '/' + p.name : p.name);
+    const r = await getJSON('https://api.deps.dev/v3/systems/' + DEPS_SYS[p.type] + '/packages/' + encodeURIComponent(name) + '/versions/' + encodeURIComponent(p.version));
+    if (!r) return;
+    if (c.f.license.src === 'missing' && r.licenses && r.licenses.length) c.f.license = F(r.licenses, 'derived', SRC.deps);
+    if (c.f.release.src === 'missing' && r.publishedAt) c.f.release = F(r.publishedAt.slice(0, 10), 'derived', SRC.deps);
+    if (k % 10 === 0) tick('Reading licences and release dates from deps.dev…', k / depsTargets.length);
+  });
+  step++;
+
+  // 3. ecosyste.ms: description, supplier, licence
+  const ecoTargets = work.filter((c) => c.f.description.src === 'missing' || c.f.supplier.src === 'missing' || c.f.license.src === 'missing');
+  await pool(ecoTargets, 6, async (c, k) => {
+    const p = parsePurl(c.purl); if (!p) return;
+    const base = 'pkg:' + p.type + '/' + (p.ns ? p.ns.split('/').map(encodeURIComponent).join('/') + '/' : '') + encodeURIComponent(p.name);
+    const r = await getJSON('https://packages.ecosyste.ms/api/v1/packages/lookup?purl=' + encodeURIComponent(base));
+    const e = Array.isArray(r) ? r[0] : null; if (!e) return;
+    if (c.f.description.src === 'missing' && e.description) c.f.description = F(e.description, 'derived', SRC.eco);
+    const sup = (e.repo_metadata && ((e.repo_metadata.owner_record && e.repo_metadata.owner_record.name) || e.repo_metadata.owner)) || (e.maintainers && e.maintainers[0] && (e.maintainers[0].name || e.maintainers[0].login));
+    if (c.f.supplier.src === 'missing' && sup) c.f.supplier = F(sup + (e.repository_url ? ' (' + e.repository_url + ')' : ''), 'derived', SRC.eco + ' repository owner / maintainer');
+    if (c.f.license.src === 'missing' && e.normalized_licenses && e.normalized_licenses.length) c.f.license = F(e.normalized_licenses, 'derived', SRC.eco);
+    if (k % 10 === 0) tick('Reading descriptions and suppliers from ecosyste.ms…', k / ecoTargets.length);
+  });
+  step++;
+
+  // 4. endoflife.date
+  tick('Checking end-of-life dates on endoflife.date…');
+  const products = await getJSON('https://endoflife.date/api/all.json');
+  if (Array.isArray(products)) {
+    const set = new Set(products); const alias = { node: 'nodejs', postgres: 'postgresql', 'python3': 'python', golang: 'go', 'openjdk': 'openjdk-builds-from-oracle', 'mysql-server': 'mysql', 'nginx-core': 'nginx', 'log4j-core': 'log4j', 'log4j-api': 'log4j', 'spring-core': 'spring-framework', 'openssl-libs': 'openssl', 'libssl3': 'openssl', 'libssl1.1': 'openssl', 'redis-server': 'redis' };
+    const cand = new Map();
+    state.comps.forEach((c) => { const n = (c.f.name.value || '').toLowerCase(); const key = set.has(n) ? n : alias[n]; if (key && set.has(key) && c.f.eol.src === 'missing' && c.f.version.value) { if (!cand.has(key)) cand.set(key, []); cand.get(key).push(c); } });
+    const keys = Array.from(cand.keys());
+    await pool(keys, 4, async (key) => {
+      const cycles = await getJSON('https://endoflife.date/api/' + key + '.json'); if (!Array.isArray(cycles)) return;
+      cand.get(key).forEach((c) => {
+        const v = String(c.f.version.value).replace(/^v/, '').replace(/^\d+:/, '');
+        const cy = cycles.filter((x) => v === String(x.cycle) || v.startsWith(String(x.cycle) + '.') || v.startsWith(String(x.cycle) + '-')).sort((a, b) => String(b.cycle).length - String(a.cycle).length)[0];
+        if (cy) c.f.eol = F(cy.eol === false ? 'Supported (no EOL date set for ' + key + ' ' + cy.cycle + ')' : cy.eol === true ? 'Reached EOL (' + key + ' ' + cy.cycle + ')' : cy.eol, 'derived', SRC.eol + ' (' + key + ' ' + cy.cycle + ')');
+        if (cy && c.f.release.src === 'missing' && cy.releaseDate && cy.latest === v) c.f.release = F(cy.latestReleaseDate || cy.releaseDate, 'derived', SRC.eol);
+      });
+    });
+  }
+  step++;
+  state.comps.forEach(deriveLocal);
+  buildCves(state);
+
+  // 5. EPSS
+  const cveIds = Array.from(state.cves.keys());
+  for (let i = 0; i < cveIds.length && !STOP; i += 80) {
+    tick('Reading exploit likelihood (EPSS) for ' + cveIds.length + ' CVEs…', i / Math.max(1, cveIds.length));
+    const r = await getJSON('https://api.first.org/data/v1/epss?cve=' + cveIds.slice(i, i + 80).join(','));
+    (r && r.data || []).forEach((d) => { const x = state.cves.get(d.cve); if (x) { x.epss = parseFloat(d.epss); x.epssPct = parseFloat(d.percentile); } });
+  }
+  step++;
+
+  // 6. CERT-In notes
+  await civnLookup(state, cveIds, (f, t) => tick(t, f));
+  step++;
+  $('#stopBtn').classList.add('hidden');
+  setStatus(STOP ? 'Look-ups stopped. Results show what was gathered.' : 'Done. Native data and online look-ups are combined below.', 1);
+}
+
+const CIVN_REST = 'https://ckdsqjrlfffpdsuuwwby.supabase.co/rest/v1';
+const CIVN_KEY = 'sb_publishable_diaMU1eKINnKFgFw_BfSeg_j6ur7epy'; // public read-only key published by the CVIN index site
+async function civnLookup(state, cveIds, tick) {
+  const H = { apikey: CIVN_KEY, Accept: 'application/json', 'Content-Type': 'application/json' };
+  const list = cveIds.slice(0, 500);
+  if (cveIds.length > 500) state.notes.push('CERT-In notes were searched for the first 500 of ' + cveIds.length + ' CVEs.');
+  const found = new Map();
+  await pool(list, 5, async (cve, k) => {
+    const r = await getJSON(CIVN_REST + '/rpc/search_advisory_ids?select=civn_id&limit=50', { method: 'POST', headers: H, body: JSON.stringify({ q: cve }) });
+    const x = state.cves.get(cve); if (x) x.civnChecked = !!r;
+    (r || []).forEach((o) => { if (!found.has(o.civn_id)) found.set(o.civn_id, new Set()); found.get(o.civn_id).add(cve); });
+    if (k % 10 === 0) tick(k / list.length, 'Searching CERT-In vulnerability notes for ' + list.length + ' CVEs…');
+  });
+  const ids = Array.from(found.keys());
+  for (let i = 0; i < ids.length && !STOP; i += 40) {
+    const q = ids.slice(i, i + 40).map((s) => '"' + s + '"').join(',');
+    const rows = await getJSON(CIVN_REST + '/vulnerability_notes?select=civn_id,title,published_date,severity,software_affected,solution,source_url,cve_ids&civn_id=in.(' + encodeURIComponent(q) + ')', { headers: H });
+    (rows || []).forEach((n) => {
+      (n.cve_ids || []).forEach((cve) => { const x = state.cves.get(cve); if (x && !x.civn.some((y) => y.civn_id === n.civn_id)) x.civn.push(n); });
+    });
+  }
+}
+
+/* ---------- CVE aggregation ---------- */
+function buildCves(state) {
+  const m = state.cves || new Map();
+  state.comps.forEach((c) => c.vulns.forEach((v) => {
+    const id = v.cve || (/^CVE-/.test(v.id) ? v.id : (v.aliases || []).find((a) => /^CVE-/.test(a)) || v.id);
+    if (!m.has(id)) m.set(id, { id, score: v.score, severity: v.severity, summary: v.summary || '', comps: [], fixed: [], src: v.src, epss: null, civn: [], civnChecked: false, other: [] });
+    const x = m.get(id);
+    if ((v.score || 0) > (x.score || 0)) { x.score = v.score; x.severity = v.severity; }
+    if (!x.summary && v.summary) x.summary = v.summary;
+    if (v.id !== id) x.other = uniq(x.other.concat([v.id]));
+    x.comps = uniq(x.comps.concat([c.f.name.value + (c.f.version.value ? '@' + c.f.version.value : '')]));
+    x.fixed = uniq(x.fixed.concat(v.fixed || []));
+    if (v.src === 'native') x.src = 'native';
+  }));
+  state.cves = m;
+}
+
+/* ---------- evaluations ---------- */
+function coverage(state, key) {
+  if (key === 'author') return { native: state.meta.authors.length || state.meta.tools.length ? 1 : 0, derived: 0, total: 1, doc: true };
+  if (key === 'timestamp') return { native: state.meta.timestamp ? 1 : 0, derived: 0, total: 1, doc: true };
+  let n = 0, d = 0; const froms = new Set();
+  state.comps.forEach((c) => { const f = c.f[key]; if (f.src === 'native') n++; else if (f.src === 'derived') { d++; if (f.from) froms.add(f.from.split(':')[0].replace(/ \(.*/, '')); } });
+  return { native: n, derived: d, total: state.comps.length, froms: Array.from(froms) };
+}
+function status(p) { return p >= 95 ? 'pass' : p >= 50 ? 'warn' : 'fail'; }
+const PILL = { pass: 'Meets', warn: 'Partial', fail: 'Gap', na: 'Not applicable', info: 'Check by hand' };
+const pill = (s, txt) => '<span class="pill p-' + s + '">' + esc(txt || PILL[s]) + '</span>';
+function share(fn, state) { const t = state.comps.length; const n = state.comps.filter(fn).length; return { n, t, p: pct(n, t) }; }
+
+function craChecks(state) {
+  const m = state.meta, out = [];
+  const isFmt = /CycloneDX|SPDX/.test(m.format);
+  const v = parseFloat(m.specVersion);
+  out.push(['Machine-readable SBOM in a common format', 'CRA Annex I, Part II (1)', isFmt ? 'pass' : 'fail', m.format]);
+  out.push(['Format version recommended for CRA SBOMs (CycloneDX ≥ 1.6 or SPDX ≥ 3.0.1)', 'BSI TR-03183-2 §4', /CycloneDX/.test(m.format) ? (v >= 1.6 ? 'pass' : 'warn') : /SPDX 3/.test(m.format) ? 'pass' : 'warn', m.format]);
+  out.push(['SBOM creator with contact (email or URL)', 'BSI TR-03183-2 §5.2.1', m.creatorContact ? 'pass' : (m.authors.length ? 'warn' : 'fail'), m.creatorContact || (m.authors.join(', ') || 'none') ]);
+  out.push(['Timestamp of SBOM creation', 'BSI TR-03183-2 §5.2.1', m.timestamp ? 'pass' : 'fail', m.timestamp || 'none']);
+  const top = state.comps.filter((c) => c.isRootDep).length;
+  out.push(['Covers at least the top-level dependencies', 'CRA Annex I, Part II (1)', top ? 'pass' : (state.docDepsCount ? 'warn' : 'fail'), top ? top + ' direct dependencies of the product are listed' : (state.docDepsCount ? 'Dependency graph present, product root not linked' : 'No dependency graph in the file')]);
+  const rows = [
+    ['Component creator', (c) => c.f.supplier.src === 'native', '§5.2.2'],
+    ['Component name', (c) => !!c.f.name.value, '§5.2.2'],
+    ['Component version', (c) => !!c.f.version.value, '§5.2.2'],
+    ['Filename of the deployable component', (c) => !!c.filename, '§5.2.2'],
+    ['Dependencies of each component', (c) => c.f.dependencies.src === 'native', '§5.2.2'],
+    ['Distribution licence as SPDX ID', (c) => c.f.license.src === 'native', '§5.2.2'],
+    ['Hash of the deployable component', (c) => c.hashAlgs.length > 0, '§5.2.2'],
+    ['SHA-512 hash', (c) => c.hashAlgs.some((a) => /512/.test(a)), '§5.2.2 (SHA-512 recommended)'],
+    ['Executable / archive / structured properties', (c) => c.f.executable.src === 'native' && c.f.archive.src === 'native' && c.f.structured.src === 'native', '§5.2.2'],
+    ['Unique identifier (PURL or CPE)', (c) => !!(c.purl || c.cpe), '§5.2.4']
+  ];
+  rows.forEach(([label, fn, ref]) => { const s = share(fn, state); out.push([label + ' (stated in the file)', 'BSI TR-03183-2 ' + ref, status(s.p), s.n + ' of ' + s.t + ' components (' + s.p + '%)']); });
+  const cves = Array.from(state.cves.values());
+  const exploit = cves.filter((x) => (x.epss || 0) >= 0.5);
+  const crit = cves.filter((x) => x.severity === 'critical');
+  out.push(['No known exploitable vulnerabilities at release', 'CRA Annex I, Part I (2)(a)', !state.online ? 'info' : exploit.length || crit.length ? 'fail' : 'pass', !state.online ? 'Run online look-ups to assess' : exploit.length + ' CVEs with EPSS ≥ 50%, ' + crit.length + ' critical CVEs']);
+  const fixable = cves.filter((x) => x.fixed.length);
+  out.push(['Vulnerabilities addressed by security updates', 'CRA Annex I, Part II (2)', !cves.length ? (state.online ? 'pass' : 'info') : fixable.length ? 'warn' : 'info', cves.length ? fixable.length + ' of ' + cves.length + ' CVEs have a fixed version available but the SBOM still lists the vulnerable one' : 'No CVEs found']);
+  const fiveY = new Date(today.getFullYear() + 5, today.getMonth(), today.getDate());
+  const eolSoon = state.comps.filter((c) => { const v = c.f.eol.value; if (!v) return false; if (/Reached EOL/.test(v)) return true; const d = Date.parse(v); return !isNaN(d) && d < fiveY; });
+  const eolKnown = state.comps.filter((c) => c.f.eol.value).length;
+  out.push(['Components supported for the product support period (5 years expected)', 'CRA Art. 13(8)', !eolKnown ? 'info' : eolSoon.length ? 'warn' : 'pass', eolKnown ? eolSoon.length + ' of ' + eolKnown + ' components with a known EOL reach it within 5 years' : 'No EOL dates known']);
+  return out;
+}
+
+function nistChecks(state) {
+  const out = []; const m = state.meta;
+  const ntia = [
+    ['Supplier name', (c) => c.f.supplier.value],
+    ['Component name', (c) => c.f.name.value],
+    ['Version of the component', (c) => c.f.version.value],
+    ['Other unique identifiers', (c) => c.purl || c.cpe],
+    ['Dependency relationship', (c) => c.f.dependencies.src === 'native']
+  ];
+  ntia.forEach(([l, fn]) => { const s = share(fn, state); out.push(['NTIA minimum element: ' + l, 'NTIA 2021, adopted by NIST under EO 14028 §4(e)', status(s.p), s.n + ' of ' + s.t + ' (' + s.p + '%)' + (l === 'Supplier name' ? ' incl. values derived online' : '')]); });
+  out.push(['NTIA minimum element: Author of SBOM data', 'NTIA 2021', m.authors.length || m.tools.length ? 'pass' : 'fail', (m.authors.concat(m.tools)).join(', ') || 'none']);
+  out.push(['NTIA minimum element: Timestamp', 'NTIA 2021', m.timestamp ? 'pass' : 'fail', m.timestamp || 'none']);
+  out.push(['Known unknowns declared (completeness)', 'NTIA 2021, practices', m.hasCompositions ? 'pass' : 'warn', m.hasCompositions ? 'compositions block present' : 'No compositions / completeness statement']);
+  out.push(['Provenance protected: SBOM is signed', 'NIST SP 800-218 PS.2 / PS.3.2', m.signed ? 'pass' : 'warn', m.signed ? 'signature present' : 'No signature in the file']);
+  const hs = share((c) => c.hashAlgs.length > 0, state);
+  out.push(['Integrity hashes for components', 'NIST SP 800-218 PS.2.1', status(hs.p), hs.n + ' of ' + hs.t + ' (' + hs.p + '%)']);
+  const weak = share((c) => c.hashAlgs.length && c.hashAlgs.every((a) => /MD5|SHA-?1$/.test(a)), state);
+  out.push(['No weak-only hashes (MD5 / SHA-1)', 'NIST SP 800-131A r2', weak.n ? 'warn' : 'pass', weak.n + ' components hashed only with MD5 or SHA-1']);
+  const cves = Array.from(state.cves.values());
+  const fixable = cves.filter((x) => x.fixed.length);
+  out.push(['Patchable vulnerabilities remediated', 'NIST SP 800-40 r4', !state.online && !cves.length ? 'info' : fixable.length ? 'fail' : 'pass', cves.length ? fixable.length + ' CVEs have an available fix' : 'No CVEs found']);
+  // NIST IR 8547 for crypto assets
+  const crypto = state.comps.filter((c) => c.crypto || c.type === 'cryptographic-asset');
+  if (crypto.length) {
+    const qv = crypto.filter((c) => /RSA|ECDSA|ECDH|EdDSA|Ed25519|DSA|DH|X25519|P-256|P-384|secp/i.test(JSON.stringify(c.crypto || {}) + ' ' + c.f.name.value));
+    out.push(['Quantum-vulnerable public-key algorithms', 'NIST IR 8547 (deprecated after 2030, disallowed after 2035)', qv.length ? 'fail' : 'pass', qv.length + ' of ' + crypto.length + ' crypto assets use RSA, ECC or finite-field DH']);
+  } else out.push(['Quantum-vulnerable public-key algorithms', 'NIST IR 8547', 'na', 'No cryptographic assets in this file (CBOM needed)']);
+  return out;
+}
+
+function machineChecks(ms) {
+  const now = Date.now();
+  return ms.map((m) => {
+    const checks = [];
+    const missing = ['name', 'ip_address', 'os_type', 'org_id', 'id'].filter((k) => !m[k]);
+    checks.push(['Asset inventory record complete', 'NIST SP 800-53 CM-8', missing.length ? 'warn' : 'pass', missing.length ? 'Missing: ' + missing.join(', ') : 'Name, IP, OS, owner org and ID present']);
+    const age = m.last_checked_at ? (now - Date.parse(m.last_checked_at)) / 864e5 : null;
+    checks.push(['Reachable for vulnerability scanning', 'NIST SP 800-53 RA-5', m.reachable ? 'pass' : 'fail', m.reachable ? 'Reachable (' + (m.last_check_latency_ms || '?') + ' ms)' : 'Unreachable: ' + (m.last_check_error || 'unknown error')]);
+    checks.push(['Connectivity checked recently', 'NIST SP 800-53 CA-7', age == null ? 'fail' : age <= 7 ? 'pass' : 'warn', m.last_checked_at ? 'Last checked ' + m.last_checked_at.slice(0, 16).replace('T', ' ') + ' UTC' : 'Never checked']);
+    checks.push(['Key-based remote access', 'NIST SP 800-53 IA-5, AC-17', m.pem_key_rustfs_ref ? 'pass' : 'warn', m.pem_key_rustfs_ref ? 'SSH key configured (path hidden)' : 'No key on record']);
+    checks.push(['SSH on default port 22', 'NIST SP 800-53 CM-7 (hardening, advisory)', m.ssh_port === 22 ? 'info' : 'pass', 'Port ' + m.ssh_port + (m.os_type === 'Windows' ? ' on a Windows host: confirm OpenSSH is the intended remote-access path' : '')]);
+    const bt = m.enabled_bom_types || [];
+    checks.push(['Software inventory (SBOM) collected', 'CERT-In SBOM guidelines · NIST SP 800-53 CM-8(a)', bt.includes('sbom') ? 'pass' : 'fail', 'Enabled: ' + bt.join(', ').toUpperCase()]);
+    checks.push(['Cryptographic inventory (CBOM/QBOM)', 'NIST IR 8547 · CERT-In CBOM/QBOM', bt.includes('cbom') && bt.includes('qbom') ? 'pass' : 'warn', bt.includes('cbom') ? 'CBOM enabled' : 'CBOM not enabled']);
+    checks.push(['Hardware inventory (HBOM)', 'CERT-In HBOM · NIST SP 800-53 CM-8', bt.includes('hbom') ? 'pass' : 'warn', bt.includes('hbom') ? 'HBOM enabled' : 'HBOM not enabled']);
+    checks.push(['AI inventory (AIBOM)', 'CERT-In AIBOM', bt.includes('aibom') ? 'pass' : 'info', bt.includes('aibom') ? 'AIBOM enabled' : 'Not enabled: needed only if the host runs AI/ML workloads']);
+    return { m, checks };
+  });
+}
+
+/* ---------- rendering ---------- */
+let STATE = null; let TAB = 'overview';
+function tabsFor(state) {
+  return state.kind === 'machines'
+    ? [['overview', 'Overview'], ['certin', 'CERT-In 21 fields'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST']]
+    : [['overview', 'Overview'], ['certin', 'CERT-In 21 fields'], ['cves', 'CVEs & CERT-In notes'], ['cra', 'EU CRA'], ['nist', 'NIST'], ['comps', 'Components']];
+}
+function render() {
+  if (!STATE) return;
+  $('#results').classList.remove('hidden');
+  $('#tabs').innerHTML = tabsFor(STATE).map(([k, l]) => '<button type="button" role="tab" data-tab="' + k + '" aria-selected="' + (TAB === k) + '">' + esc(l) + '</button>').join('');
+  const p = $('#panel');
+  p.innerHTML = STATE.kind === 'machines' ? renderMachines(TAB) : ({ overview: renderOverview, certin: renderCertIn, cves: renderCves, cra: renderCra, nist: renderNist, comps: renderComps }[TAB] || renderOverview)();
+}
+function checksTable(rows) {
+  const c = { pass: 0, warn: 0, fail: 0, info: 0, na: 0 }; rows.forEach((r) => c[r[2]]++);
+  return '<div class="row" style="gap:8px">' + ['pass', 'warn', 'fail', 'info', 'na'].filter((k) => c[k]).map((k) => pill(k, c[k] + ' ' + PILL[k].toLowerCase())).join('') + '</div>' +
+    '<div class="tbl"><table><thead><tr><th>Requirement</th><th>Reference</th><th>Result</th><th>Evidence</th></tr></thead><tbody>' +
+    rows.map((r) => '<tr><td>' + esc(r[0]) + '</td><td class="src">' + esc(r[1]) + '</td><td>' + pill(r[2]) + '</td><td>' + esc(r[3]) + '</td></tr>').join('') + '</tbody></table></div>';
+}
+function renderOverview() {
+  const s = STATE, m = s.meta; const cves = Array.from(s.cves.values());
+  const cov = CERTIN.map(([k]) => coverage(s, k)); const nat = cov.reduce((a, c) => a + (c.native >= c.total * .95 ? 1 : 0), 0); const any = cov.reduce((a, c) => a + ((c.native + c.derived) >= c.total * .95 ? 1 : 0), 0);
+  const notes = cves.filter((x) => x.civn.length).length;
+  const sevCount = (k) => cves.filter((x) => x.severity === k).length;
+  return '<div class="card"><h2>' + esc(s.fileName) + '</h2><p class="muted">' + esc(m.format) + ' · ' + fmt(s.comps.length) + ' components · generated ' + esc(m.timestamp || 'at an unknown time') + (m.authors.length || m.tools.length ? ' by ' + esc(m.authors.concat(m.tools).join(', ')) : '') + '</p>' +
+    '<div class="grid">' +
+    stat(nat + ' / 21', 'CERT-In fields complete from the file') + stat(any + ' / 21', 'Complete after online derivation') +
+    stat(fmt(cves.length), 'CVEs (' + sevCount('critical') + ' critical, ' + sevCount('high') + ' high)') + stat(fmt(notes), 'CVEs with a CERT-In note') +
+    stat(craChecks(s).filter((r) => r[2] === 'fail').length, 'EU CRA gaps') + stat(nistChecks(s).filter((r) => r[2] === 'fail').length, 'NIST gaps') +
+    '</div>' + (s.notes.length ? '<div class="note warn">' + s.notes.map(esc).join('<br>') + '</div>' : '') +
+    (!s.online ? '<div class="note">Online look-ups are off, so CVEs, CERT-In notes and derived fields come only from the file. Tick “Look up missing data online” and reload the file to fill them.</div>' : '') +
+    '</div>' + renderCertInSummary();
+}
+const stat = (v, l) => '<div class="stat"><b>' + esc(v) + '</b><span>' + esc(l) + '</span></div>';
+function renderCertInSummary() {
+  const rows = CERTIN.map(([k, label, def], i) => { const c = coverage(STATE, k); return { i: i + 1, k, label, def, ...c, miss: c.total - c.native - c.derived }; });
+  return '<div class="card"><h2>CERT-In 21 SBOM fields</h2><p class="muted">Green: stated in your file. Blue: derived online or by rule (source named). Grey: still missing.</p>' +
+    '<div class="tbl"><table><thead><tr><th>#</th><th>Field</th><th>Coverage</th><th class="num">In file</th><th class="num">Derived</th><th class="num">Missing</th><th>Derived from</th></tr></thead><tbody>' +
+    rows.map((r) => '<tr><td class="mono">' + r.i + '</td><td><b>' + esc(r.label) + '</b><div class="src">' + esc(r.def) + (r.doc ? ' · document-level' : '') + '</div></td><td><div class="bar" role="img" aria-label="' + pct(r.native, r.total) + '% in file, ' + pct(r.derived, r.total) + '% derived"><i style="width:' + pct(r.native, r.total) + '%;background:var(--pass)"></i><i style="width:' + pct(r.derived, r.total) + '%;background:var(--info)"></i></div></td><td class="num">' + fmt(r.native) + '</td><td class="num">' + fmt(r.derived) + '</td><td class="num">' + fmt(r.miss) + '</td><td class="src">' + esc((r.froms || []).join('; ') || (r.doc ? 'Cannot be derived: must be written by the SBOM author' : r.derived ? '' : '—')) + '</td></tr>').join('') +
+    '</tbody></table></div><div class="legend"><span><span class="sw" style="background:var(--pass)"></span>In file</span><span><span class="sw" style="background:var(--info)"></span>Derived</span><span><span class="sw" style="background:var(--soft);border:1px solid var(--line)"></span>Missing</span></div></div>';
+}
+function renderCertIn() {
+  const s = STATE; const q = (s.filter || '').toLowerCase();
+  const list = s.comps.filter((c) => !q || (c.f.name.value || '').toLowerCase().includes(q)).slice(0, 200);
+  return renderCertInSummary() + '<div class="card"><div class="row" style="justify-content:space-between"><h2>Field values per component</h2><div class="row"><input type="search" id="q" placeholder="Filter by component name" value="' + esc(s.filter || '') + '" aria-label="Filter components"><button type="button" data-export="certin">Download CSV</button></div></div>' +
+    (s.comps.length > 200 ? '<p class="muted" style="font-size:13px">Showing up to 200 components. Use the filter or download the CSV for all ' + fmt(s.comps.length) + '.</p>' : '') +
+    list.map((c) => '<details><summary>' + esc(c.f.name.value || '(unnamed)') + ' <span class="mono muted">' + esc(c.f.version.value || '') + '</span> ' + fieldScore(c) + '</summary><div><div class="tbl"><table><thead><tr><th>Field</th><th>Value</th><th>Source</th></tr></thead><tbody>' +
+      CERTIN.map(([k, label]) => { const f = docField(k) || c.f[k]; return '<tr><td>' + esc(label) + '</td><td>' + fv(f.value) + '</td><td>' + srcBadge(f) + '</td></tr>'; }).join('') + '</tbody></table></div></div></details>').join('') + '</div>';
+}
+function docField(k) { if (k === 'author') return F(STATE.meta.authors.concat(STATE.meta.tools).join(', ') || null, 'native'); if (k === 'timestamp') return F(STATE.meta.timestamp, 'native'); return null; }
+function fieldScore(c) { const n = CERTIN.filter(([k]) => (docField(k) || c.f[k]).src === 'native').length; const d = CERTIN.filter(([k]) => (docField(k) || c.f[k]).src === 'derived').length; return '<span class="pill p-pass">' + n + ' in file</span> ' + (d ? '<span class="pill p-info">' + d + ' derived</span>' : ''); }
+function fv(v) { if (v == null) return '<span class="muted">—</span>'; if (Array.isArray(v)) return v.length ? esc(v.slice(0, 12).join(', ') + (v.length > 12 ? ' … +' + (v.length - 12) : '')) : '<span class="muted">none</span>'; return esc(v); }
+function srcBadge(f) { if (f.src === 'native') return pill('pass', 'In file') + (f.extra ? '<div class="src">' + esc(f.extra) + '</div>' : ''); if (f.src === 'derived') return pill('info', 'Derived') + '<div class="src">' + esc(f.from || '') + '</div>'; return pill('na', 'Missing'); }
+
+function renderCves() {
+  const s = STATE; const cves = Array.from(s.cves.values()).sort((a, b) => ((b.epss || 0) - (a.epss || 0)) || ((b.score || 0) - (a.score || 0)));
+  if (!cves.length) return '<div class="card"><h2>CVEs</h2><p>No vulnerabilities were found' + (s.online ? ' in the file or on OSV.dev for components with a PURL.' : ' in the file. Turn on online look-ups to check OSV.dev.') + '</p></div>';
+  const withNotes = cves.filter((x) => x.civn.length);
+  const filt = s.cveFilter || 'all';
+  const shown = cves.filter((x) => filt === 'all' || (filt === 'notes' && x.civn.length) || (filt === 'crit' && (x.severity === 'critical' || x.severity === 'high')));
+  const sevCls = (sv) => sv === 'critical' || sv === 'high' ? 'fail' : sv === 'medium' ? 'warn' : sv === 'low' ? 'info' : 'na';
+  return '<div class="card"><h2>' + fmt(cves.length) + ' CVEs · ' + fmt(withNotes.length) + ' have a CERT-In vulnerability note</h2><p class="muted">Sorted by exploit likelihood (EPSS), then CVSS. CERT-In notes are matched by CVE ID in the Sukhi CVIN index of cert-in.org.in notes.</p>' +
+    '<div class="row"><select id="cveFilter" aria-label="Filter CVEs"><option value="all"' + (filt === 'all' ? ' selected' : '') + '>All CVEs</option><option value="notes"' + (filt === 'notes' ? ' selected' : '') + '>Only CVEs with a CERT-In note</option><option value="crit"' + (filt === 'crit' ? ' selected' : '') + '>Critical and high</option></select><button type="button" data-export="cves">Download CSV</button></div>' +
+    '<div class="tbl"><table><thead><tr><th>CVE</th><th>Severity</th><th class="num">CVSS</th><th class="num">EPSS</th><th>Components</th><th>Fix</th><th>CERT-In note</th></tr></thead><tbody>' +
+    shown.slice(0, 400).map((x) => '<tr><td class="mono"><a href="https://nvd.nist.gov/vuln/detail/' + encodeURIComponent(x.id) + '" target="_blank" rel="noopener">' + esc(x.id) + '</a>' + (x.other.length ? '<div class="src">' + esc(x.other.slice(0, 2).join(', ')) + '</div>' : '') + '<div class="src">' + (x.src === 'native' ? 'listed in file' : 'found via OSV.dev') + '</div></td>' +
+      '<td>' + pill(sevCls(x.severity), (x.severity || 'unknown').toUpperCase()) + '</td><td class="num">' + (x.score != null ? x.score : '—') + '</td><td class="num">' + (x.epss != null ? (x.epss * 100).toFixed(1) + '%' : '—') + '</td>' +
+      '<td>' + esc(x.comps.slice(0, 3).join(', ') + (x.comps.length > 3 ? ' +' + (x.comps.length - 3) : '')) + '</td><td>' + (x.fixed.length ? esc(x.fixed.slice(0, 3).join(', ')) : '<span class="muted">none listed</span>') + '</td>' +
+      '<td>' + (x.civn.length ? x.civn.map((n) => '<div class="civn"><a href="' + esc(safeUrl(n.source_url)) + '" target="_blank" rel="noopener"><b>' + esc(n.civn_id) + '</b></a><span>' + esc(n.title) + '</span><span class="src">' + esc((n.severity || '') + ' · ' + (n.published_date || '')) + '</span>' + (n.solution ? '<span class="src">Solution: ' + esc(n.solution.slice(0, 220)) + (n.solution.length > 220 ? '…' : '') + '</span>' : '') + '</div>').join('') : (x.civnChecked ? '<span class="muted">No CERT-In note</span>' : '<span class="muted">Not checked</span>')) + '</td></tr>').join('') +
+    '</tbody></table></div>' + (shown.length > 400 ? '<p class="muted">Showing 400 of ' + fmt(shown.length) + '. Download the CSV for all.</p>' : '') + '</div>';
+}
+function safeUrl(u) { return /^https:\/\/(www\.)?cert-in\.org\.in\//.test(u || '') ? u : 'https://www.cert-in.org.in/'; }
+function renderCra() { return '<div class="card"><h2>EU Cyber Resilience Act</h2><p class="muted">SBOM duties in Annex I, read with BSI TR-03183-2 (the most detailed published SBOM profile for the CRA). Vulnerability-reporting duties apply from 11 Sep 2026; the remaining obligations from 11 Dec 2027.</p>' + checksTable(craChecks(STATE)) + '</div>'; }
+function renderNist() { return '<div class="card"><h2>NIST</h2><p class="muted">NTIA minimum elements (referenced by NIST for EO 14028), NIST SP 800-218 (SSDF), SP 800-40 r4 (patching), SP 800-131A (hashes) and IR 8547 (post-quantum transition).</p>' + checksTable(nistChecks(STATE)) + '</div>'; }
+function renderComps() {
+  const s = STATE;
+  const cats = {}; s.comps.forEach((c) => { const k = licCategory(c.f.license.value) || 'Unknown'; cats[k] = (cats[k] || 0) + 1; });
+  const colors = { 'Permissive': 'var(--pass)', 'Public domain': '#7FB89A', 'Weak copyleft': 'var(--warn)', 'Strong copyleft': 'var(--fail)', 'Proprietary / custom': 'var(--info)', 'Unclassified': 'var(--na)', 'Unknown': 'var(--line)' };
+  const tot = s.comps.length;
+  return '<div class="card"><h2>Licences across ' + fmt(tot) + ' components</h2><div class="bar" style="height:14px">' + Object.entries(cats).map(([k, n]) => '<i style="height:14px;width:' + (n / tot * 100) + '%;background:' + colors[k] + '" title="' + esc(k + ': ' + n) + '"></i>').join('') + '</div><div class="legend">' + Object.entries(cats).map(([k, n]) => '<span><span class="sw" style="background:' + colors[k] + '"></span>' + esc(k) + ' ' + fmt(n) + '</span>').join('') + '</div></div>' +
+    '<div class="card"><h2>Components</h2><div class="tbl"><table><thead><tr><th>Name</th><th>Version</th><th>Type</th><th>Licence</th><th>Identifier</th><th class="num">CVEs</th></tr></thead><tbody>' +
+    s.comps.slice(0, 500).map((c) => '<tr><td>' + esc(c.f.name.value) + '</td><td class="mono">' + esc(c.f.version.value || '') + '</td><td>' + esc(c.type) + '</td><td>' + fv(c.f.license.value) + (c.f.license.src === 'derived' ? ' ' + pill('info', 'derived') : '') + '</td><td class="mono" style="word-break:break-all">' + esc(c.purl || c.cpe || '') + '</td><td class="num">' + c.vulns.length + '</td></tr>').join('') + '</tbody></table></div></div>';
+}
+function renderMachines(tab) {
+  const ms = STATE.machines; const res = machineChecks(ms);
+  const intro = '<div class="note">This file is an <b>IntelliXBOM machine export</b>: an inventory of ' + ms.length + ' scan targets, not an SBOM. It has no software components or CVEs, so the CERT-In fields, CVE look-ups and the CRA SBOM checks need the SBOMs these machines produce. Export them from BOM Manager and upload them here.</div>';
+  if (tab === 'overview') {
+    const reach = ms.filter((m) => m.reachable).length;
+    return '<div class="card"><h2>' + esc(STATE.fileName) + '</h2><div class="grid">' + stat(ms.length, 'Machines') + stat(reach, 'Reachable') + stat(ms.length - reach, 'Unreachable (timeout)') + stat(uniq(ms.map((m) => m.org_id)).length, 'Organisations') + '</div>' + intro + '</div>' +
+      '<div class="card"><h2>Machines</h2><div class="tbl"><table><thead><tr><th>Machine</th><th>OS</th><th>Connection</th><th>Last check</th><th>BOM types</th><th>Added</th></tr></thead><tbody>' +
+      ms.map((m) => '<tr><td><b>' + esc(m.name) + '</b><div class="mono muted">' + esc(m.ip_address) + ':' + esc(m.ssh_port) + ' · ' + esc(m.ssh_username) + '</div></td><td>' + esc(m.os_type) + '</td><td>' + (m.reachable ? pill('pass', 'Reachable') : pill('fail', 'Unreachable')) + (m.last_check_error ? '<div class="src">' + esc(m.last_check_error) + '</div>' : '') + '</td><td class="mono">' + esc((m.last_checked_at || '').slice(0, 16).replace('T', ' ')) + '<div class="src">' + esc(m.last_check_latency_ms) + ' ms</div></td><td>' + esc((m.enabled_bom_types || []).join(', ').toUpperCase()) + '</td><td class="mono">' + esc((m.created_at || '').slice(0, 10)) + '</td></tr>').join('') + '</tbody></table></div></div>';
+  }
+  if (tab === 'certin') return '<div class="card"><h2>CERT-In 21 SBOM fields</h2>' + intro + '<p>What this export does show: ' + ms.filter((m) => (m.enabled_bom_types || []).includes('sbom')).length + ' of ' + ms.length + ' machines have SBOM generation enabled, so their scans produce the CycloneDX files that carry these fields. CERT-In also expects CBOM/QBOM (enabled on ' + ms.filter((m) => (m.enabled_bom_types || []).includes('cbom')).length + '), HBOM (' + ms.filter((m) => (m.enabled_bom_types || []).includes('hbom')).length + ') and, for AI systems, AIBOM (' + ms.filter((m) => (m.enabled_bom_types || []).includes('aibom')).length + ').</p></div>';
+  if (tab === 'cves') return '<div class="card"><h2>CVEs and CERT-In notes</h2>' + intro + '</div>';
+  if (tab === 'cra') return '<div class="card"><h2>EU Cyber Resilience Act</h2><p>The CRA applies to products with digital elements, judged from their SBOM and vulnerability handling. A list of servers is ' + pill('na') + ' on its own. Upload the SBOM of each product running on these machines.</p></div>';
+  return '<div class="card"><h2>NIST asset controls</h2><p class="muted">For an asset inventory the relevant NIST guidance is SP 800-53 r5 (CM-8 inventory, RA-5 scanning, CA-7 monitoring, IA-5/AC-17 remote access) and IR 8547 for crypto inventory.</p></div>' +
+    res.map((r) => '<div class="card"><h3>' + esc(r.m.name) + ' <span class="mono muted">' + esc(r.m.ip_address) + '</span></h3>' + checksTable(r.checks) + '</div>').join('');
+}
+
+/* ---------- export ---------- */
+function csv(rows) { return rows.map((r) => r.map((v) => '"' + String(v == null ? '' : Array.isArray(v) ? v.join('; ') : v).replace(/"/g, '""') + '"').join(',')).join('\r\n'); }
+function download(name, text) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+function exportCertIn() {
+  const head = ['Component', 'Version']; CERTIN.forEach(([, l]) => head.push(l, l + ' source'));
+  const rows = [head].concat(STATE.comps.map((c) => { const r = [c.f.name.value, c.f.version.value]; CERTIN.forEach(([k]) => { const f = docField(k) || c.f[k]; r.push(f.value, f.src === 'derived' ? 'Derived: ' + f.from : f.src === 'native' ? 'In file' : 'Missing'); }); return r; }));
+  download('certin-21-fields.csv', csv(rows));
+}
+function exportCves() {
+  const rows = [['CVE', 'Severity', 'CVSS', 'EPSS', 'Components', 'Fixed versions', 'Source', 'CERT-In notes', 'CERT-In titles']].concat(Array.from(STATE.cves.values()).map((x) => [x.id, x.severity, x.score, x.epss, x.comps, x.fixed, x.src === 'native' ? 'file' : 'OSV.dev', x.civn.map((n) => n.civn_id), x.civn.map((n) => n.title)]));
+  download('cves-certin-notes.csv', csv(rows));
+}
+
+/* ---------- load ---------- */
+async function load(text, fileName) {
+  let doc; try { doc = JSON.parse(text); } catch (e) { setStatus('This file is not valid JSON: ' + e.message, 0); return; }
+  const kind = detect(doc);
+  if (kind === 'unknown') { setStatus('Not recognised. Upload a CycloneDX or SPDX JSON SBOM, or an IntelliXBOM machine export.', 0); return; }
+  TAB = 'overview';
+  if (kind === 'machines') { STATE = { kind, fileName, machines: doc, comps: [], cves: new Map(), meta: { authors: [], tools: [] }, notes: [] }; setStatus('Read ' + doc.length + ' machines.', 1); render(); return; }
+  const parsed = kind === 'cyclonedx' ? parseCycloneDX(doc) : kind === 'spdx2' ? parseSPDX2(doc) : parseSPDX3(doc);
+  STATE = { kind, fileName, ...parsed, cves: new Map(), notes: [], online: $('#online').checked };
+  STATE.comps.forEach(deriveLocal); buildCves(STATE);
+  setStatus('Read ' + fmt(STATE.comps.length) + ' components from ' + parsed.meta.format + '.', STATE.online ? 0 : 1);
+  render();
+  if (STATE.online) { await enrich(STATE); render(); }
+}
+$('#file').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) f.text().then((t) => load(t, f.name)); });
+const drop = $('#drop');
+['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) f.text().then((t) => load(t, f.name)); });
+$('#stopBtn').addEventListener('click', () => { STOP = true; });
+$('#tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { TAB = b.dataset.tab; render(); } });
+$('#panel').addEventListener('click', (e) => { const b = e.target.closest('[data-export]'); if (b) (b.dataset.export === 'certin' ? exportCertIn : exportCves)(); });
+$('#panel').addEventListener('input', (e) => { if (e.target.id === 'q') { STATE.filter = e.target.value; const pos = e.target.selectionStart; render(); const q = $('#q'); q.focus(); q.setSelectionRange(pos, pos); } });
+$('#panel').addEventListener('change', (e) => { if (e.target.id === 'cveFilter') { STATE.cveFilter = e.target.value; render(); } });
+$('#sampleBtn').addEventListener('click', () => load(JSON.stringify(SAMPLE), 'example-sbom.cdx.json (example)'));
+
+/* Example SBOM: public open-source packages with known CVEs, for trying the tool. */
+const SAMPLE = {
+  bomFormat: 'CycloneDX', specVersion: '1.5', serialNumber: 'urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79', version: 1,
+  metadata: { timestamp: '2026-10-01T10:00:00Z', tools: { components: [{ type: 'application', name: 'example-generator', version: '1.0' }] }, component: { 'bom-ref': 'app', type: 'application', name: 'example-web-app', version: '2.3.0' } },
+  components: [
+    { 'bom-ref': 'lodash', type: 'library', name: 'lodash', version: '4.17.15', purl: 'pkg:npm/lodash@4.17.15', licenses: [{ license: { id: 'MIT' } }], hashes: [{ alg: 'SHA-512', content: 'bf690311ee7b95e713ba568322e3533f2dd1cb880b189e99d4edef13592b81764daec43e2c54c61d5c558dc5cfb35ecb85b65519e74026ff17675b6f8f916f4a' }] },
+    { 'bom-ref': 'express', type: 'library', name: 'express', version: '4.17.1', purl: 'pkg:npm/express@4.17.1' },
+    { 'bom-ref': 'log4j', type: 'library', name: 'log4j-core', group: 'org.apache.logging.log4j', version: '2.14.1', purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1' },
+    { 'bom-ref': 'django', type: 'framework', name: 'django', version: '3.2.0', purl: 'pkg:pypi/django@3.2.0' },
+    { 'bom-ref': 'xnet', type: 'library', name: 'golang.org/x/net', version: 'v0.7.0', purl: 'pkg:golang/golang.org/x/net@v0.7.0' },
+    { 'bom-ref': 'redis', type: 'application', name: 'redis', version: '7.2.4', purl: 'pkg:generic/redis@7.2.4', description: 'In-memory data store' }
+  ],
+  dependencies: [{ ref: 'app', dependsOn: ['lodash', 'express', 'log4j', 'django', 'xnet', 'redis'] }, { ref: 'express', dependsOn: [] }],
+  vulnerabilities: [{ id: 'CVE-2025-49844', source: { name: 'NVD' }, ratings: [{ score: 9.9, severity: 'critical', method: 'CVSSv31' }], description: 'Redis Lua use-after-free may lead to remote code execution', recommendation: 'Upgrade to 7.2.11 or later', affects: [{ ref: 'redis' }] }]
+};
+</script>
+</body>
+</html>
